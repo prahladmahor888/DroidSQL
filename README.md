@@ -1,10 +1,10 @@
-# PocketSQL - Offline Database Terminal for Android
+# DroidSQL - Offline Database Terminal for Android
 
 ![Build Status](https://img.shields.io/badge/build-ready-brightgreen) ![API](https://img.shields.io/badge/API-24%2B-blue) ![License](https://img.shields.io/badge/license-Academic-yellow)
 
 ## 🚀 Project Overview
 
-**PocketSQL** is a professional offline Android application that functions as a universal SQLite database management terminal. Execute raw SQL commands, visualize dynamic query results, and manage databases directly on your Android device—no internet required.
+**DroidSQL** is a professional offline Android application that functions as a universal SQLite database management terminal. Execute raw SQL commands, visualize dynamic query results, and manage databases directly on your Android device—no internet required.
 
 Built using **MVVM architecture**, this project demonstrates deep understanding of:
 - Database systems and SQL execution
@@ -69,29 +69,6 @@ Built using **MVVM architecture**, this project demonstrates deep understanding 
 - **Database**: Android SQLite (native)
 - **UI**: ViewBinding + LiveData
 - **Build System**: Gradle (Kotlin DSL)
-
----
-
-## 📦 Project Structure
-
-```
-app/src/main/java/com/smartqueue/droidsql/
-├── model/
-│   ├── DatabaseManager.java       # SQLite operations
-│   ├── QueryResult.java           # Data container
-│   └── SQLCommand.java            # History record
-├── viewmodel/
-│   └── DatabaseViewModel.java     # State management
-├── utils/
-│   └── SQLTemplateHelper.java     # SQL templates
-└── MainActivity.java               # UI controller
-
-app/src/main/res/
-├── layout/
-│   └── activity_main.xml          # Terminal interface
-└── values/
-    └── colors.xml                 # Terminal theme
-```
 
 ---
 
