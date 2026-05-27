@@ -127,6 +127,43 @@ public class DatabaseManager {
             return new QueryResult(false, "ERROR: Empty SQL command");
         }
 
+        List<String> statements = splitStatements(sql);
+        if (statements.isEmpty()) {
+            return new QueryResult(false, "ERROR: Empty SQL command");
+        }
+
+        if (statements.size() == 1) {
+            return executeSingleSQL(statements.get(0));
+        } else {
+            long startTime = System.currentTimeMillis();
+            QueryResult lastResult = null;
+            
+            for (String statement : statements) {
+                lastResult = executeSingleSQL(statement);
+                if (!lastResult.isSuccess()) {
+                    return lastResult;
+                }
+            }
+            
+            long totalTime = System.currentTimeMillis() - startTime;
+            if (lastResult != null) {
+                lastResult.setExecutionTimeMs(totalTime);
+                if (lastResult.hasRows()) {
+                    return lastResult;
+                } else {
+                    return new QueryResult(true, "All commands executed successfully (" + statements.size() + " statements)");
+                }
+            }
+            return new QueryResult(true, "Executed " + statements.size() + " statements");
+        }
+    }
+
+    private QueryResult executeSingleSQL(String sql) {
+        sql = sql.trim();
+        if (sql.isEmpty()) {
+            return new QueryResult(false, "ERROR: Empty SQL command");
+        }
+
         String upperSQL = sql.toUpperCase();
 
         // Normalize for easier matching: remove semicolon and trim
@@ -168,6 +205,11 @@ public class DatabaseManager {
                 return handleShowTables(targetDb);
             }
             return handleShowTables(null);
+        }
+
+        // Check for SHOW TRIGGERS command
+        if (cleanUpper.equals("SHOW TRIGGERS")) {
+            return handleShowTriggers();
         }
 
         // Check for SHOW COLUMNS command (describe table structure)
@@ -561,7 +603,7 @@ public class DatabaseManager {
         Cursor cursor = null;
         try {
             List<String> tables = new ArrayList<>();
-            cursor = dbToUse.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name!='android_metadata' ORDER BY name", null);
+            cursor = dbToUse.rawQuery("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name!='android_metadata' ORDER BY name", null);
             
             if (cursor.moveToFirst()) {
                 do {
@@ -594,6 +636,45 @@ public class DatabaseManager {
             if (isTempConnection && dbToUse != null) {
                 dbToUse.close();
             }
+        }
+    }
+
+    /**
+     * Handles SHOW TRIGGERS command.
+     * Lists all triggers in current database.
+     * Complexity: O(T) where T = number of triggers
+     */
+    private QueryResult handleShowTriggers() {
+        if (database == null || !database.isOpen()) {
+            return new QueryResult(false, "ERROR: No database is open");
+        }
+        
+        Cursor cursor = null;
+        try {
+            List<String> triggers = new ArrayList<>();
+            cursor = database.rawQuery("SELECT name FROM sqlite_master WHERE type='trigger' ORDER BY name", null);
+            
+            while (cursor.moveToNext()) {
+                triggers.add(cursor.getString(0));
+            }
+            cursor.close();
+            cursor = null;
+            
+            List<String> columns = new ArrayList<>();
+            columns.add("Triggers_in_" + currentDatabaseName);
+            
+            List<List<String>> rows = new ArrayList<>();
+            for (String trigger : triggers) {
+                List<String> row = new ArrayList<>();
+                row.add(trigger);
+                rows.add(row);
+            }
+            
+            return new QueryResult(true, "Found " + triggers.size() + " trigger(s)", columns, rows);
+        } catch (Exception e) {
+            return new QueryResult(false, "Error listing triggers: " + e.getMessage());
+        } finally {
+            if (cursor != null) cursor.close();
         }
     }
 
@@ -1159,6 +1240,83 @@ public class DatabaseManager {
                commandType.equals("EXPLAIN");
     }
 
+    public static List<String> splitStatements(String sql) {
+        List<String> statements = new ArrayList<>();
+        StringBuilder sb = new StringBuilder();
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        boolean inBacktick = false;
+        
+        int beginEndDepth = 0;
+        boolean isTriggerDefinition = false;
+        StringBuilder currentWord = new StringBuilder();
+        
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            
+            if (c == '\\' && i + 1 < sql.length()) {
+                sb.append(c);
+                sb.append(sql.charAt(i + 1));
+                i++;
+                continue;
+            }
+            
+            if (c == '\'' && !inDoubleQuote && !inBacktick) {
+                inSingleQuote = !inSingleQuote;
+            } else if (c == '"' && !inSingleQuote && !inBacktick) {
+                inDoubleQuote = !inDoubleQuote;
+            } else if (c == '`' && !inSingleQuote && !inDoubleQuote) {
+                inBacktick = !inBacktick;
+            }
+            
+            sb.append(c);
+            
+            if (!inSingleQuote && !inDoubleQuote && !inBacktick) {
+                if (Character.isLetterOrDigit(c) || c == '_') {
+                    currentWord.append(c);
+                } else {
+                    String word = currentWord.toString().toUpperCase();
+                    currentWord.setLength(0);
+                    
+                    if (word.equals("TRIGGER")) {
+                        String currentSoFar = sb.toString().toUpperCase();
+                        if (currentSoFar.contains("CREATE")) {
+                            isTriggerDefinition = true;
+                        }
+                    } else if (word.equals("BEGIN")) {
+                        if (isTriggerDefinition) {
+                            beginEndDepth++;
+                        }
+                    } else if (word.equals("END")) {
+                        if (isTriggerDefinition && beginEndDepth > 0) {
+                            beginEndDepth--;
+                            if (beginEndDepth == 0) {
+                                isTriggerDefinition = false;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (c == ';' && !inSingleQuote && !inDoubleQuote && !inBacktick && beginEndDepth == 0) {
+                String stmt = sb.toString().trim();
+                if (!stmt.isEmpty()) {
+                    statements.add(stmt);
+                }
+                sb.setLength(0);
+                isTriggerDefinition = false;
+                beginEndDepth = 0;
+            }
+        }
+        
+        String stmt = sb.toString().trim();
+        if (!stmt.isEmpty()) {
+            statements.add(stmt);
+        }
+        
+        return statements;
+    }
+
     /**
      * Exports current database to Downloads folder.
      * Complexity: O(N) where N = database file size
@@ -1262,7 +1420,7 @@ public class DatabaseManager {
         Cursor cursor = null;
         try {
             cursor = database.rawQuery(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('android_metadata', 'sqlite_sequence') ORDER BY name", 
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT IN ('android_metadata', 'sqlite_sequence') ORDER BY name", 
                 null);
             while (cursor.moveToNext()) {
                 tables.add(cursor.getString(0));
@@ -1273,6 +1431,31 @@ public class DatabaseManager {
             }
         }
         return tables;
+    }
+
+    public List<String> getColumnNames(String tableName) {
+        List<String> columns = new ArrayList<>();
+        if (database == null || !database.isOpen() || tableName == null) {
+            return columns;
+        }
+
+        Cursor cursor = null;
+        try {
+            cursor = database.rawQuery("PRAGMA table_info(" + tableName + ")", null);
+            int nameIndex = cursor.getColumnIndex("name");
+            if (nameIndex != -1) {
+                while (cursor.moveToNext()) {
+                    columns.add(cursor.getString(nameIndex));
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            if (cursor != null) {
+                cursor.close();
+            }
+        }
+        return columns;
     }
 
 

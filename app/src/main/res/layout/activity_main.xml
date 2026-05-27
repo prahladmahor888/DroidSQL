@@ -29,139 +29,141 @@
         android:background="#222222"
         android:paddingVertical="4dp">
 
-        <!-- Line 1: Control Buttons (Adaptive Width) -->
+        <!-- Control Area (Buttons + Divider) -->
         <LinearLayout
+            android:id="@+id/controlButtonsArea"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center"
-            android:paddingHorizontal="4dp">
+            android:orientation="vertical">
 
-            <!-- Previous -->
-            <TextView
-                android:id="@+id/btnPrevious"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
+            <!-- Line 1: Control Buttons (Adaptive Width) -->
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_gravity="center_horizontal"
                 android:gravity="center"
-                android:text="↑"
-                android:textColor="@color/terminal_info"
-                android:textSize="20sp"
-                android:textStyle="bold" />
+                android:paddingHorizontal="4dp">
 
-            <!-- Next -->
-            <TextView
-                android:id="@+id/btnNext"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="↓"
-                android:textColor="@color/terminal_info"
-                android:textSize="20sp"
-                android:textStyle="bold" />
+                <!-- Previous -->
+                <TextView
+                    android:id="@+id/btnPrevious"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="↑"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
 
-            <View android:layout_width="1dp" android:layout_height="24dp" android:background="#444444" android:layout_gravity="center_vertical" />
+                <!-- Next -->
+                <TextView
+                    android:id="@+id/btnNext"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="↓"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
 
-            <!-- List Tables -->
-            <TextView
-                android:id="@+id/btnListTables"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="L"
-                android:tooltipText="List Tables"
-                android:textColor="@color/terminal_info"
-                android:textSize="@dimen/toolbar_text_size" />
+                <View android:layout_width="1dp" android:layout_height="24dp" android:background="#444444" android:layout_gravity="center_vertical" android:layout_marginHorizontal="4dp" />
 
-            <!-- Templates -->
-            <TextView
-                android:id="@+id/btnTemplates"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="T"
-                android:tooltipText="Templates"
-                android:textColor="@color/terminal_info"
-                android:textSize="@dimen/toolbar_text_size" />
+                <!-- List Tables -->
+                <TextView
+                    android:id="@+id/btnListTables"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="L"
+                    android:tooltipText="List Tables"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="@dimen/toolbar_text_size" />
 
-            <!-- Export -->
-            <TextView
-                android:id="@+id/btnExport"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="E"
-                android:tooltipText="Export DB"
-                android:textColor="@color/terminal_info"
-                android:textSize="@dimen/toolbar_text_size" />
+                <!-- Templates -->
+                <TextView
+                    android:id="@+id/btnTemplates"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="T"
+                    android:tooltipText="Templates"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="@dimen/toolbar_text_size" />
 
-            <!-- Clear -->
-            <TextView
-                android:id="@+id/btnClear"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="C"
-                android:tooltipText="Clear Terminal"
-                android:textColor="@color/terminal_info"
-                android:textSize="@dimen/toolbar_text_size" />
+                <!-- Export -->
+                <TextView
+                    android:id="@+id/btnExport"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="E"
+                    android:tooltipText="Export DB"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="@dimen/toolbar_text_size" />
 
-            <View android:layout_width="1dp" android:layout_height="24dp" android:background="#444444" android:layout_gravity="center_vertical" />
+                <!-- Clear -->
+                <TextView
+                    android:id="@+id/btnClear"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="C"
+                    android:tooltipText="Clear Terminal"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="@dimen/toolbar_text_size" />
 
-            <!-- Settings -->
-            <TextView
-                android:id="@+id/btnSettings"
-                android:layout_width="0dp"
-                android:layout_height="@dimen/toolbar_btn_size"
-                android:layout_weight="1"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:clickable="true"
-                android:focusable="true"
-                android:fontFamily="monospace"
-                android:gravity="center"
-                android:text="S"
-                android:tooltipText="Settings"
-                android:textColor="@color/terminal_info"
-                android:textSize="@dimen/toolbar_text_size"
-                android:textStyle="bold" />
+                <View android:layout_width="1dp" android:layout_height="24dp" android:background="#444444" android:layout_gravity="center_vertical" android:layout_marginHorizontal="4dp" />
 
+                <!-- Settings -->
+                <TextView
+                    android:id="@+id/btnSettings"
+                    android:layout_width="@dimen/toolbar_btn_width"
+                    android:layout_height="@dimen/toolbar_btn_size"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="S"
+                    android:tooltipText="Settings"
+                    android:textColor="@color/terminal_info"
+                    android:textSize="@dimen/toolbar_text_size"
+                    android:textStyle="bold" />
+
+            </LinearLayout>
+
+            <!-- Divider -->
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:background="#333333"
+                android:layout_marginVertical="2dp"/>
         </LinearLayout>
-
-        <!-- Divider -->
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="#333333"
-            android:layout_marginVertical="2dp"/>
 
         <!-- Line 2: Symbol ScrollView -->
         <HorizontalScrollView
@@ -207,23 +209,34 @@
             android:layout_height="match_parent"
             android:padding="12dp"
             android:scrollbars="vertical"
-            android:fillViewport="true">
+            android:fillViewport="true"
+            android:focusable="true"
+            android:clickable="true"
+            android:nextFocusDown="@id/etSqlInput">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
-                <!-- Terminal Output (Commands + Results) -->
-                <TextView
-                    android:id="@+id/tvTerminalOutput"
+                <!-- Scrollable Terminal Output Container -->
+                <HorizontalScrollView
+                    android:id="@+id/hsvTerminal"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:textColor="@color/terminal_text"
-                    android:fontFamily="monospace"
-                    android:textSize="13sp"
-                    android:lineSpacingExtra="2dp"
-                    android:text="" />
+                    android:scrollbars="none">
+
+                    <!-- Terminal Output (Commands + Results) -->
+                    <TextView
+                        android:id="@+id/tvTerminalOutput"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="@color/terminal_text"
+                        android:fontFamily="monospace"
+                        android:textSize="13sp"
+                        android:lineSpacingExtra="2dp"
+                        android:text="" />
+                </HorizontalScrollView>
 
 
                 <!-- Active Command Input Line -->
@@ -231,7 +244,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal"
-                    android:gravity="center_vertical">
+                    android:gravity="top">
                     
                     <!-- mysql> Prompt -->
                     <TextView
@@ -243,7 +256,10 @@
                         android:fontFamily="monospace"
                         android:textSize="13sp"
                         android:paddingEnd="4dp"
-                        android:paddingStart="0dp" />
+                        android:paddingStart="0dp"
+                        android:paddingTop="0dp"
+                        android:paddingBottom="0dp"
+                        android:includeFontPadding="false" />
 
                     <!-- Command Input -->
                     <EditText
@@ -251,6 +267,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:background="@android:color/transparent"
+                        android:textCursorDrawable="@null"
                         android:fontFamily="monospace"
                         android:gravity="top"
                         android:hint=""
@@ -261,10 +278,27 @@
                         android:textSize="13sp"
                         android:focusable="true"
                         android:focusableInTouchMode="true"
+                        android:includeFontPadding="false"
+                        android:nextFocusUp="@id/svTerminalOutput"
+                        android:nextFocusDown="@id/btnPrevious"
                         tools:ignore="SpeakableTextPresentCheck,TouchTargetSizeCheck" />
                 </LinearLayout>
             </LinearLayout>
         </ScrollView>
+
+        <!-- Floating Rotate Button -->
+        <com.google.android.material.floatingactionbutton.FloatingActionButton
+            android:id="@+id/fabRotate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:layout_alignParentEnd="true"
+            android:layout_margin="16dp"
+            android:src="@android:drawable/ic_menu_rotate"
+            android:visibility="gone"
+            app:backgroundTint="@color/terminal_background"
+            app:tint="@color/terminal_info"
+            tools:ignore="SpeakableTextPresentCheck" />
     </RelativeLayout>
 
 </RelativeLayout>

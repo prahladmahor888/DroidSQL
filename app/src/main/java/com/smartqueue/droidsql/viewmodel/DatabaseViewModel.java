@@ -29,6 +29,9 @@ public class DatabaseViewModel extends AndroidViewModel {
     private MutableLiveData<String> terminalOutput;
     private MutableLiveData<Boolean> isDatabaseOpen;
     private MutableLiveData<String> currentDatabaseName;
+    private MutableLiveData<List<String>> schemaSuggestions;
+    private MutableLiveData<List<String>> tableNamesLiveData;
+    private java.util.Map<String, List<String>> tableColumnsCache = new java.util.concurrent.ConcurrentHashMap<>();
     
     // Command history with O(1) indexed access
     private List<SQLCommand> commandHistory;
@@ -48,6 +51,8 @@ public class DatabaseViewModel extends AndroidViewModel {
         terminalOutput = new MutableLiveData<>();
         isDatabaseOpen = new MutableLiveData<>(false);
         currentDatabaseName = new MutableLiveData<>("");
+        schemaSuggestions = new MutableLiveData<>(new ArrayList<>());
+        tableNamesLiveData = new MutableLiveData<>(new ArrayList<>());
         
         commandHistory = new ArrayList<>();
         currentHistoryIndex = -1;
@@ -75,6 +80,7 @@ public class DatabaseViewModel extends AndroidViewModel {
                 currentDatabaseName.postValue(dbName);
                 postToTerminal("[SUCCESS] Database '" + dbName + "' is open\n");
                 postToTerminal("Ready to execute SQL commands\n\n");
+                refreshSchemaCache();
             } else {
                 isDatabaseOpen.postValue(false);
                 postToTerminal("[ERROR] Failed to open database '" + dbName + "'\n");
@@ -121,6 +127,7 @@ public class DatabaseViewModel extends AndroidViewModel {
 
             // Format output MySQL-style
             if (result.isSuccess()) {
+                refreshSchemaCache();
                 StringBuilder output = new StringBuilder();
                 
                 // Check if it's a USE command
@@ -357,8 +364,7 @@ public class DatabaseViewModel extends AndroidViewModel {
      */
     public void clearTerminal() {
         terminalLog = new StringBuilder();
-        terminalLog.append("Terminal cleared\n\nmysql> ");
-        terminalOutput.setValue(terminalLog.toString());
+        terminalOutput.setValue("");
     }
 
     /**
@@ -393,6 +399,52 @@ public class DatabaseViewModel extends AndroidViewModel {
 
     public LiveData<String> getCurrentDatabaseName() {
         return currentDatabaseName;
+    }
+
+    public LiveData<List<String>> getSchemaSuggestions() {
+        return schemaSuggestions;
+    }
+
+    public LiveData<List<String>> getTableNamesLiveData() {
+        return tableNamesLiveData;
+    }
+
+    public List<String> getColumnsForTable(String tableName) {
+        if (tableName == null) {
+            return new ArrayList<>();
+        }
+        List<String> cols = tableColumnsCache.get(tableName.toUpperCase());
+        return cols != null ? cols : new ArrayList<>();
+    }
+
+    public void refreshSchemaCache() {
+        if (databaseManager.isDatabaseOpen()) {
+            List<String> tables = databaseManager.getTableNames();
+            tableNamesLiveData.postValue(tables);
+            
+            java.util.Map<String, List<String>> newCache = new java.util.HashMap<>();
+            for (String table : tables) {
+                newCache.put(table.toUpperCase(), databaseManager.getColumnNames(table));
+            }
+            tableColumnsCache.clear();
+            tableColumnsCache.putAll(newCache);
+            
+            List<String> suggestions = new ArrayList<>();
+            for (String table : tables) {
+                suggestions.add(table);
+                List<String> columns = databaseManager.getColumnNames(table);
+                for (String col : columns) {
+                    if (!suggestions.contains(col)) {
+                        suggestions.add(col);
+                    }
+                }
+            }
+            schemaSuggestions.postValue(suggestions);
+        } else {
+            tableNamesLiveData.postValue(new ArrayList<>());
+            tableColumnsCache.clear();
+            schemaSuggestions.postValue(new ArrayList<>());
+        }
     }
 
     public List<SQLCommand> getCommandHistory() {

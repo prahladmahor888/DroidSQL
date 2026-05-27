@@ -42,6 +42,17 @@ public class MainActivity extends AppCompatActivity {
     // Autocomplete
     private ListPopupWindow suggestionPopup;
     private TerminalAdapter suggestionAdapter;
+    
+    private int currentThemeColor = 0xFF00FF00; // Default: Matrix Green
+    private int currentThemeBgColor = 0xFF000A02;
+    private int currentThemeToolbarColor = 0xFF001505;
+    private int currentThemeBottomColor = 0xFF001003;
+    private List<String> dbSchemaSuggestions = new ArrayList<>();
+    private boolean isAutoPairing = false;
+    
+    // Auto-rotation suggestion fields
+    private android.view.OrientationEventListener orientationEventListener;
+    private int targetManualOrientation = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -56,11 +67,16 @@ public class MainActivity extends AppCompatActivity {
 
         // Setup UI listeners
         setupListeners();
+        setupTvFocusSelector();
+        setupKeyboardAnimationListener();
         setupAutocomplete();
         setupTerminalCopy();
 
         // Observe LiveData for reactive UI updates
         observeViewModel();
+        
+        // Setup orientation change suggestion button
+        setupRotationListener();
     }
 
     /**
@@ -122,6 +138,26 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
+                if (isAutoPairing) return;
+                
+                boolean autoClose = getSharedPreferences("DroidSQL", MODE_PRIVATE).getBoolean("auto_close_pairs", true);
+                if (autoClose && count == 1 && before == 0 && s.length() > start) {
+                    char c = s.charAt(start);
+                    char closing = 0;
+                    if (c == '(') closing = ')';
+                    else if (c == '[') closing = ']';
+                    else if (c == '{') closing = '}';
+                    else if (c == '\'') closing = '\'';
+                    else if (c == '"') closing = '"';
+                    
+                    if (closing != 0) {
+                        isAutoPairing = true;
+                        binding.etSqlInput.getText().insert(start + 1, String.valueOf(closing));
+                        binding.etSqlInput.setSelection(start + 1);
+                        isAutoPairing = false;
+                    }
+                }
+
                 if (count == 1 && s.length() > start && s.charAt(start) == '\n') {
                     // Newline detected at current cursor position
                     
@@ -159,6 +195,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void afterTextChanged(android.text.Editable s) {
+                updatePrompt();
                 if (suggestionPopup == null) return;
                 
                 String text = s.toString();
@@ -182,10 +219,104 @@ public class MainActivity extends AppCompatActivity {
                     List<String> matches = new ArrayList<>();
                     String upperWord = currentWord.toUpperCase();
                     
-                    for (String keyword : SQLTemplateHelper.getKeywords()) {
-                        // Allow exact matches to enable auto-casing (typing 'sel' -> 'SELECT ')
-                        if (keyword.startsWith(upperWord)) {
-                            matches.add(keyword);
+                    // 1. Analyze context of the query
+                    String textBeforeWord = text.substring(0, wordStart).trim();
+                    String textBeforeWordUpper = textBeforeWord.toUpperCase();
+                    
+                    boolean suggestOnlyTables = false;
+                    boolean suggestOnlyColumns = false;
+                    
+                    boolean isCreateIndex = textBeforeWordUpper.contains("CREATE INDEX") || textBeforeWordUpper.contains("CREATE UNIQUE INDEX");
+                    
+                    // Check if inside parentheses of CREATE INDEX ON table(...)
+                    boolean isIndexColumnContext = false;
+                    String indexTable = null;
+                    if (isCreateIndex && textBeforeWordUpper.contains("(")) {
+                        int openParenIndex = textBeforeWordUpper.lastIndexOf("(");
+                        String beforeParen = textBeforeWordUpper.substring(0, openParenIndex).trim();
+                        int lastSpace = beforeParen.lastIndexOf(" ");
+                        if (lastSpace != -1) {
+                            indexTable = beforeParen.substring(lastSpace + 1).trim();
+                            isIndexColumnContext = true;
+                        } else {
+                            indexTable = beforeParen;
+                            isIndexColumnContext = true;
+                        }
+                        if (indexTable != null) {
+                            indexTable = indexTable.replace("\"", "").replace("'", "").replace("`", "");
+                        }
+                    }
+                    
+                    // Check if previous word indicates table context
+                    if (textBeforeWordUpper.endsWith("FROM") || 
+                        textBeforeWordUpper.endsWith("JOIN") || 
+                        textBeforeWordUpper.endsWith("INTO") || 
+                        textBeforeWordUpper.endsWith("UPDATE") || 
+                        textBeforeWordUpper.endsWith("TABLE") || 
+                        textBeforeWordUpper.endsWith("DESCRIBE") || 
+                        textBeforeWordUpper.endsWith("DESC") ||
+                        (textBeforeWordUpper.endsWith("ON") && isCreateIndex)) {
+                        suggestOnlyTables = true;
+                    } 
+                    // Check if previous word indicates column context
+                    else if (textBeforeWordUpper.endsWith("SET") || 
+                             textBeforeWordUpper.endsWith("WHERE") || 
+                             (textBeforeWordUpper.endsWith("ON") && !isCreateIndex) || 
+                             textBeforeWordUpper.endsWith("SELECT") ||
+                             textBeforeWordUpper.endsWith("BY") ||
+                             textBeforeWordUpper.endsWith("AND") ||
+                             textBeforeWordUpper.endsWith("OR") ||
+                             isIndexColumnContext) {
+                        suggestOnlyColumns = true;
+                    }
+                    
+                    if (suggestOnlyTables) {
+                        // Only suggest matching table names
+                        List<String> tables = viewModel.getTableNamesLiveData().getValue();
+                        if (tables != null) {
+                            for (String table : tables) {
+                                if (table.toUpperCase().startsWith(upperWord)) {
+                                    matches.add(table);
+                                }
+                            }
+                        }
+                    } else if (suggestOnlyColumns) {
+                        // Find the table name mentioned in the query
+                        String tableName = (indexTable != null) ? indexTable : findTableNameInQuery(text);
+                        if (tableName != null) {
+                            // Suggest columns of that specific table
+                            List<String> columns = viewModel.getColumnsForTable(tableName);
+                            for (String col : columns) {
+                                if (col.toUpperCase().startsWith(upperWord)) {
+                                    matches.add(col);
+                                }
+                            }
+                        } else {
+                            // Fallback: suggest all columns in the database if table cannot be determined
+                            if (dbSchemaSuggestions != null) {
+                                List<String> tables = viewModel.getTableNamesLiveData().getValue();
+                                for (String term : dbSchemaSuggestions) {
+                                    if (tables == null || !tables.contains(term)) { // If it's not a table, it's a column
+                                        if (term.toUpperCase().startsWith(upperWord)) {
+                                            matches.add(term);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Default behavior: suggest matching keywords, tables, and columns
+                        for (String keyword : SQLTemplateHelper.getKeywords()) {
+                            if (keyword.startsWith(upperWord)) {
+                                matches.add(keyword);
+                            }
+                        }
+                        if (dbSchemaSuggestions != null) {
+                            for (String term : dbSchemaSuggestions) {
+                                if (term.toUpperCase().startsWith(upperWord) && !matches.contains(term)) {
+                                    matches.add(term);
+                                }
+                            }
                         }
                     }
                     
@@ -249,6 +380,45 @@ public class MainActivity extends AppCompatActivity {
         setupSymbolToolbar();
     }
 
+    private String findTableNameInQuery(String sql) {
+        String upper = sql.toUpperCase();
+        
+        List<String> keywords = new java.util.ArrayList<>(java.util.Arrays.asList(
+            "FROM", "UPDATE", "INSERT INTO", "JOIN", "DESCRIBE", "DESC", "INTO"
+        ));
+        if (upper.contains("CREATE INDEX") || upper.contains("CREATE UNIQUE INDEX")) {
+            keywords.add("ON");
+        }
+        
+        List<String> tables = viewModel.getTableNamesLiveData().getValue();
+        if (tables == null || tables.isEmpty()) {
+            return null;
+        }
+        
+        for (String keyword : keywords) {
+            int index = upper.indexOf(keyword);
+            if (index != -1) {
+                // Get the text after the keyword
+                String after = sql.substring(index + keyword.length()).trim();
+                // Get the first token
+                String[] tokens = after.split("[\\s(;,]");
+                if (tokens.length > 0 && !tokens[0].isEmpty()) {
+                    String candidate = tokens[0].trim();
+                    // Clean quotes if any
+                    candidate = candidate.replace("\"", "").replace("'", "").replace("`", "");
+                    
+                    // Verify if this candidate is actually a table in our database
+                    for (String table : tables) {
+                        if (table.equalsIgnoreCase(candidate)) {
+                            return table;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     /**
      * Wires up the symbol buttons to insert text at cursor position.
      */
@@ -281,19 +451,306 @@ public class MainActivity extends AppCompatActivity {
      * Complexity: O(1)
      */
     private void showSettingsDialog() {
-        String[] options = {"Font Size", "Color Theme"};
+        android.content.SharedPreferences prefs = getSharedPreferences("DroidSQL", MODE_PRIVATE);
+        boolean lineWrap = prefs.getBoolean("line_wrap", true);
+        boolean vibrate = prefs.getBoolean("vibrate_on_error", true);
+        boolean autoClose = prefs.getBoolean("auto_close_pairs", true);
+
+        String[] options = {
+            "📖 SQL Learning Guide",
+            "Font Size",
+            "Color Theme",
+            "Line Wrapping: " + (lineWrap ? "ON" : "OFF"),
+            "Vibrate on Error: " + (vibrate ? "ON" : "OFF"),
+            "Auto-Close Pairs: " + (autoClose ? "ON" : "OFF")
+        };
         
         new androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("Terminal Settings")
             .setItems(options, (dialog, which) -> {
                 if (which == 0) {
-                    showFontSizeDialog();
+                    showLearningGuideDialog();
                 } else if (which == 1) {
+                    showFontSizeDialog();
+                } else if (which == 2) {
                     showColorThemeDialog();
+                } else if (which == 3) {
+                    prefs.edit().putBoolean("line_wrap", !lineWrap).apply();
+                    applyLineWrap(!lineWrap);
+                    Toast.makeText(this, "Line wrapping " + (!lineWrap ? "enabled" : "disabled"), Toast.LENGTH_SHORT).show();
+                } else if (which == 4) {
+                    prefs.edit().putBoolean("vibrate_on_error", !vibrate).apply();
+                    Toast.makeText(this, "Vibration on error " + (!vibrate ? "enabled" : "disabled"), Toast.LENGTH_SHORT).show();
+                } else if (which == 5) {
+                    prefs.edit().putBoolean("auto_close_pairs", !autoClose).apply();
+                    Toast.makeText(this, "Auto-close pairs " + (!autoClose ? "enabled" : "disabled"), Toast.LENGTH_SHORT).show();
                 }
             })
             .setNegativeButton("Close", null)
             .show();
+    }
+
+    private void showLearningGuideDialog() {
+        try {
+            // Create root container
+            android.widget.LinearLayout root = new android.widget.LinearLayout(this);
+            root.setOrientation(android.widget.LinearLayout.VERTICAL);
+            root.setBackgroundColor(currentThemeBgColor);
+            root.setPadding(40, 40, 40, 40);
+            
+            // Create scroll view
+            android.widget.ScrollView scrollView = new android.widget.ScrollView(this);
+            scrollView.setLayoutParams(new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f));
+            root.addView(scrollView);
+            
+            // Container inside scroll view
+            android.widget.LinearLayout container = new android.widget.LinearLayout(this);
+            container.setOrientation(android.widget.LinearLayout.VERTICAL);
+            scrollView.addView(container);
+            
+            android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
+                .setView(root)
+                .create();
+                
+            if (dialog.getWindow() != null) {
+                dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+            }
+            
+            // Populate list initially
+            showLearningItemsList(container, dialog);
+            
+            // Add close button at the bottom of root
+            android.widget.Button closeBtn = new android.widget.Button(this);
+            closeBtn.setText("Close");
+            closeBtn.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF333333));
+            closeBtn.setTextColor(Color.WHITE);
+            closeBtn.setOnClickListener(v -> dialog.dismiss());
+            
+            android.widget.LinearLayout.LayoutParams btnParams = new android.widget.LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+            btnParams.topMargin = 20;
+            closeBtn.setLayoutParams(btnParams);
+            root.addView(closeBtn);
+            
+            dialog.show();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private void showLearningItemsList(android.widget.LinearLayout container, android.app.AlertDialog dialog) {
+        container.removeAllViews();
+        
+        // Title
+        TextView title = new TextView(this);
+        title.setText("SQL Learning Guide");
+        title.setTextColor(currentThemeColor);
+        title.setTextSize(22f);
+        title.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 10, 0, 30);
+        container.addView(title);
+        
+        List<com.smartqueue.droidsql.utils.SQLTutorialHelper.TutorialItem> items = com.smartqueue.droidsql.utils.SQLTutorialHelper.getItems();
+        for (int i = 0; i < items.size(); i++) {
+            final com.smartqueue.droidsql.utils.SQLTutorialHelper.TutorialItem item = items.get(i);
+            
+            TextView itemTv = new TextView(this);
+            itemTv.setText(item.keyword + " (" + item.category + ")");
+            itemTv.setTextColor(currentThemeColor);
+            itemTv.setTextSize(16f);
+            itemTv.setPadding(20, 24, 20, 24);
+            itemTv.setTypeface(Typeface.MONOSPACE);
+            
+            // Selectable background
+            android.util.TypedValue outValue = new android.util.TypedValue();
+            getTheme().resolveAttribute(android.R.attr.selectableItemBackground, outValue, true);
+            itemTv.setBackgroundResource(outValue.resourceId);
+            itemTv.setFocusable(true);
+            itemTv.setClickable(true);
+            
+            // D-pad support matching other buttons
+            itemTv.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus) {
+                    itemTv.setBackgroundColor(currentThemeColor);
+                    itemTv.setTextColor(currentThemeBgColor);
+                } else {
+                    itemTv.setBackgroundColor(Color.TRANSPARENT);
+                    itemTv.setTextColor(currentThemeColor);
+                }
+            });
+            
+            itemTv.setOnClickListener(v -> {
+                showLearningItemDetail(container, item, dialog);
+            });
+            
+            container.addView(itemTv);
+            
+            // Divider
+            if (i < items.size() - 1) {
+                android.view.View divider = new android.view.View(this);
+                android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, 2);
+                divider.setLayoutParams(params);
+                divider.setBackgroundColor((currentThemeColor & 0x00FFFFFF) | 0x33000000);
+                container.addView(divider);
+            }
+        }
+    }
+
+    private void showLearningItemDetail(android.widget.LinearLayout container, com.smartqueue.droidsql.utils.SQLTutorialHelper.TutorialItem item, android.app.AlertDialog dialog) {
+        container.removeAllViews();
+        
+        // 1. Back button
+        TextView backTv = new TextView(this);
+        backTv.setText("← Back to List");
+        backTv.setTextColor(currentThemeColor);
+        backTv.setTextSize(14f);
+        backTv.setTypeface(Typeface.MONOSPACE);
+        backTv.setPadding(0, 10, 0, 20);
+        backTv.setClickable(true);
+        backTv.setFocusable(true);
+        backTv.setOnClickListener(v -> {
+            showLearningItemsList(container, dialog);
+        });
+        backTv.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                backTv.setBackgroundColor(currentThemeColor);
+                backTv.setTextColor(currentThemeBgColor);
+            } else {
+                backTv.setBackgroundColor(Color.TRANSPARENT);
+                backTv.setTextColor(currentThemeColor);
+            }
+        });
+        container.addView(backTv);
+        
+        // 2. Keyword Title
+        TextView titleTv = new TextView(this);
+        titleTv.setText(item.keyword);
+        titleTv.setTextColor(currentThemeColor);
+        titleTv.setTextSize(24f);
+        titleTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        titleTv.setPadding(0, 0, 0, 5);
+        container.addView(titleTv);
+        
+        // 3. Category
+        TextView catTv = new TextView(this);
+        catTv.setText(item.category);
+        catTv.setTextColor(currentThemeColor);
+        catTv.setAlpha(0.7f);
+        catTv.setTextSize(12f);
+        catTv.setTypeface(Typeface.MONOSPACE);
+        catTv.setPadding(0, 0, 0, 20);
+        container.addView(catTv);
+        
+        // 4. Description Label
+        TextView descLabel = new TextView(this);
+        descLabel.setText("Description:");
+        descLabel.setTextColor(currentThemeColor);
+        descLabel.setTextSize(14f);
+        descLabel.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        descLabel.setPadding(0, 10, 0, 5);
+        container.addView(descLabel);
+        
+        // Description Text
+        TextView descTv = new TextView(this);
+        descTv.setText(item.description);
+        descTv.setTextColor(Color.WHITE); // Standard light color on dark backgrounds
+        if (currentThemeColor == 0xFF333333) {
+            descTv.setTextColor(Color.BLACK); // Black on Day light background
+        }
+        descTv.setTextSize(14f);
+        descTv.setLineSpacing(4f, 1f);
+        descTv.setPadding(0, 0, 0, 20);
+        container.addView(descTv);
+        
+        // 5. Syntax Label
+        TextView syntaxLabel = new TextView(this);
+        syntaxLabel.setText("Syntax:");
+        syntaxLabel.setTextColor(currentThemeColor);
+        syntaxLabel.setTextSize(14f);
+        syntaxLabel.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        syntaxLabel.setPadding(0, 10, 0, 5);
+        container.addView(syntaxLabel);
+        
+        // Syntax Block
+        TextView syntaxTv = new TextView(this);
+        syntaxTv.setText(item.syntax);
+        syntaxTv.setTextColor(currentThemeColor);
+        syntaxTv.setTextSize(13f);
+        syntaxTv.setTypeface(Typeface.MONOSPACE);
+        syntaxTv.setPadding(20, 20, 20, 20);
+        // Semi-transparent color block for code background
+        syntaxTv.setBackgroundColor((currentThemeColor & 0x00FFFFFF) | 0x11000000); // 10% opacity code block
+        container.addView(syntaxTv);
+        
+        // Space
+        android.view.View space1 = new android.view.View(this);
+        space1.setLayoutParams(new android.widget.LinearLayout.LayoutParams(1, 20));
+        container.addView(space1);
+        
+        // 6. Example Label
+        TextView exampleLabel = new TextView(this);
+        exampleLabel.setText("Example:");
+        exampleLabel.setTextColor(currentThemeColor);
+        exampleLabel.setTextSize(14f);
+        exampleLabel.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        exampleLabel.setPadding(0, 10, 0, 5);
+        container.addView(exampleLabel);
+        
+        // Example Block
+        TextView exampleTv = new TextView(this);
+        exampleTv.setText(item.example);
+        exampleTv.setTextColor(currentThemeColor);
+        exampleTv.setTextSize(13f);
+        exampleTv.setTypeface(Typeface.MONOSPACE);
+        exampleTv.setPadding(20, 20, 20, 20);
+        exampleTv.setBackgroundColor((currentThemeColor & 0x00FFFFFF) | 0x15000000); // 13% opacity code block
+        container.addView(exampleTv);
+        
+        // Space
+        android.view.View space2 = new android.view.View(this);
+        space2.setLayoutParams(new android.widget.LinearLayout.LayoutParams(1, 30));
+        container.addView(space2);
+        
+        // 7. Try it Button
+        android.widget.Button tryBtn = new android.widget.Button(this);
+        tryBtn.setText("⚡ Try It");
+        tryBtn.setBackgroundTintList(android.content.res.ColorStateList.valueOf(currentThemeColor));
+        tryBtn.setTextColor(currentThemeBgColor);
+        tryBtn.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tryBtn.setOnClickListener(v -> {
+            binding.etSqlInput.setText(item.example);
+            binding.etSqlInput.setSelection(item.example.length());
+            Toast.makeText(this, "Example query loaded into console", Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+        });
+        container.addView(tryBtn);
+    }
+
+    private void applyLineWrap(boolean enabled) {
+        android.view.ViewGroup.LayoutParams params = binding.tvTerminalOutput.getLayoutParams();
+        if (enabled) {
+            params.width = android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+        } else {
+            params.width = android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
+        }
+        binding.tvTerminalOutput.setLayoutParams(params);
+    }
+
+    private void triggerErrorFeedback() {
+        boolean vibrate = getSharedPreferences("DroidSQL", MODE_PRIVATE).getBoolean("vibrate_on_error", true);
+        if (vibrate) {
+            android.os.Vibrator vibrator = (android.os.Vibrator) getSystemService(android.content.Context.VIBRATOR_SERVICE);
+            if (vibrator != null) {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    vibrator.vibrate(android.os.VibrationEffect.createOneShot(100, android.os.VibrationEffect.DEFAULT_AMPLITUDE));
+                } else {
+                    vibrator.vibrate(100);
+                }
+            }
+        }
     }
 
     private void showFontSizeDialog() {
@@ -315,7 +772,19 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showColorThemeDialog() {
-        String[] themes = {"Matrix Green", "Cyberpunk Amber", "Classic White", "Hacker Cyan"};
+        String[] themes = {
+            "Matrix Green", 
+            "Cyberpunk Amber", 
+            "Classic White", 
+            "Hacker Cyan",
+            "Dracula Purple",
+            "Nord Ice",
+            "Monokai Orange",
+            "Solarized Teal",
+            "VS Code Dark",
+            "Default Dark",
+            "Day (Light)"
+        };
         int currentTheme = getSharedPreferences("DroidSQL", MODE_PRIVATE).getInt("theme_index", 0);
 
         new androidx.appcompat.app.AlertDialog.Builder(this)
@@ -336,6 +805,7 @@ public class MainActivity extends AppCompatActivity {
         android.content.SharedPreferences prefs = getSharedPreferences("DroidSQL", MODE_PRIVATE);
         applyFontSize(prefs.getInt("font_size_index", 2)); // Default: Medium (13sp)
         applyTheme(prefs.getInt("theme_index", 0));
+        applyLineWrap(prefs.getBoolean("line_wrap", true));
     }
 
     private void applyFontSize(int index) {
@@ -357,28 +827,293 @@ public class MainActivity extends AppCompatActivity {
 
     private void applyTheme(int index) {
         int color;
+        int bgColor;
+        int toolbarColor;
+        int bottomToolbarColor;
+        
         switch (index) {
-            case 0: color = 0xFF00FF00; break; // Matrix Green
-            case 1: color = 0xFFFFB000; break; // Cyberpunk Amber
-            case 2: color = 0xFFEEEEEE; break; // Classic White
-            case 3: color = 0xFF00FFFF; break; // Hacker Cyan
-            default: color = 0xFF00FF00;
+            case 0: // Matrix Green
+                color = 0xFF00FF00;
+                bgColor = 0xFF000A02;
+                toolbarColor = 0xFF001505;
+                bottomToolbarColor = 0xFF001003;
+                break;
+            case 1: // Cyberpunk Amber
+                color = 0xFFFFB000;
+                bgColor = 0xFF150B1A;
+                toolbarColor = 0xFF22122A;
+                bottomToolbarColor = 0xFF1B0E21;
+                break;
+            case 2: // Classic White
+                color = 0xFFEEEEEE;
+                bgColor = 0xFF0D0D0D;
+                toolbarColor = 0xFF1A1A1A;
+                bottomToolbarColor = 0xFF141414;
+                break;
+            case 3: // Hacker Cyan
+                color = 0xFF00FFFF;
+                bgColor = 0xFF020D14;
+                toolbarColor = 0xFF0B1B26;
+                bottomToolbarColor = 0xFF07141D;
+                break;
+            case 4: // Dracula Purple
+                color = 0xFFBD93F9;
+                bgColor = 0xFF282A36;
+                toolbarColor = 0xFF1E1F29;
+                bottomToolbarColor = 0xFF21222C;
+                break;
+            case 5: // Nord Ice
+                color = 0xFF88C0D0;
+                bgColor = 0xFF2E3440;
+                toolbarColor = 0xFF3B4252;
+                bottomToolbarColor = 0xFF353C4A;
+                break;
+            case 6: // Monokai Orange
+                color = 0xFFFD971F;
+                bgColor = 0xFF272822;
+                toolbarColor = 0xFF1E1F1C;
+                bottomToolbarColor = 0xFF22231E;
+                break;
+            case 7: // Solarized Teal
+                color = 0xFF2AA198;
+                bgColor = 0xFF002B36;
+                toolbarColor = 0xFF073642;
+                bottomToolbarColor = 0xFF052E37;
+                break;
+            case 8: // VS Code Dark
+                color = 0xFF4FC1FF;
+                bgColor = 0xFF1E1E1E;
+                toolbarColor = 0xFF007ACC;
+                bottomToolbarColor = 0xFF252526;
+                break;
+            case 9: // Default Dark
+                color = 0xFFFFFFFF;
+                bgColor = 0xFF121212;
+                toolbarColor = 0xFF1F1F1F;
+                bottomToolbarColor = 0xFF181818;
+                break;
+            case 10: // Day (Light)
+                color = 0xFF333333;
+                bgColor = 0xFFF5F5F5;
+                toolbarColor = 0xFFE0E0E0;
+                bottomToolbarColor = 0xFFECECEC;
+                break;
+            default:
+                color = 0xFF00FF00;
+                bgColor = 0xFF000A02;
+                toolbarColor = 0xFF001505;
+                bottomToolbarColor = 0xFF001003;
         }
+        
+        currentThemeColor = color;
+        currentThemeBgColor = bgColor;
+        currentThemeToolbarColor = toolbarColor;
+        currentThemeBottomColor = bottomToolbarColor;
+        
+        // Apply background colors to layouts
+        binding.main.setBackgroundColor(bgColor);
+        binding.topToolbar.setBackgroundColor(toolbarColor);
+        binding.bottomToolbarArea.setBackgroundColor(bottomToolbarColor);
         
         // Apply color to terminal elements
         binding.tvTerminalOutput.setTextColor(color);
         binding.etSqlInput.setTextColor(color);
-        // Prompt can stay distinct or match theme - matching theme looks cleaner
+        // Prompt matches the theme color
         binding.tvPrompt.setTextColor(color); 
         
-        // Also update status bar icons for consistency
-        // Also update status bar icons for consistency
-        binding.topToolbar.setTitleTextColor(color); // Apply to Toolbar Title
-        binding.btnPrevious.setTextColor(color);
-        binding.btnNext.setTextColor(color);
-        binding.btnListTables.setTextColor(color);
-        binding.btnExport.setTextColor(color);
-        binding.btnSettings.setTextColor(color);
+        // Also update toolbar title text color for consistency
+        binding.topToolbar.setTitleTextColor(color);
+        
+        // Set suggestion popup background
+        if (suggestionPopup != null) {
+            suggestionPopup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(bgColor));
+        }
+        
+        // Style rotation suggestion button dynamically
+        if (binding.fabRotate != null) {
+            binding.fabRotate.setBackgroundTintList(android.content.res.ColorStateList.valueOf(bgColor));
+            binding.fabRotate.setImageTintList(android.content.res.ColorStateList.valueOf(color));
+        }
+        
+        // Dynamic status bar and navigation bar coloring
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+            getWindow().setStatusBarColor(toolbarColor);
+            getWindow().setNavigationBarColor(bottomToolbarColor);
+        }
+        
+        // Refresh all buttons colors dynamically
+        refreshButtonColors();
+    }
+
+    private void setupTvFocusSelector() {
+        // Control buttons
+        TextView[] controlButtons = {
+            binding.btnPrevious,
+            binding.btnNext,
+            binding.btnListTables,
+            binding.btnTemplates,
+            binding.btnExport,
+            binding.btnClear,
+            binding.btnSettings
+        };
+        
+        for (TextView btn : controlButtons) {
+            btn.setOnFocusChangeListener((v, hasFocus) -> {
+                if (hasFocus) {
+                    btn.setBackgroundColor(currentThemeColor);
+                    btn.setTextColor(currentThemeBgColor);
+                } else {
+                    btn.setBackgroundColor(Color.TRANSPARENT);
+                    btn.setTextColor(currentThemeColor);
+                }
+            });
+        }
+        
+        // Symbol buttons
+        android.widget.LinearLayout symbolContainer = findViewById(R.id.symbolContainer);
+        if (symbolContainer != null) {
+            for (int i = 0; i < symbolContainer.getChildCount(); i++) {
+                android.view.View child = symbolContainer.getChildAt(i);
+                if (child instanceof TextView) {
+                    TextView tv = (TextView) child;
+                    tv.setOnFocusChangeListener((v, hasFocus) -> {
+                        if (hasFocus) {
+                            tv.setBackgroundColor(currentThemeColor);
+                            tv.setTextColor(currentThemeBgColor);
+                        } else {
+                            tv.setBackgroundColor(Color.TRANSPARENT);
+                            tv.setTextColor(currentThemeColor);
+                        }
+                    });
+                }
+            }
+        }
+
+
+    }
+
+    private void refreshButtonColors() {
+        // Control buttons
+        TextView[] controlButtons = {
+            binding.btnPrevious,
+            binding.btnNext,
+            binding.btnListTables,
+            binding.btnTemplates,
+            binding.btnExport,
+            binding.btnClear,
+            binding.btnSettings
+        };
+        
+        for (TextView btn : controlButtons) {
+            if (btn.hasFocus()) {
+                btn.setBackgroundColor(currentThemeColor);
+                btn.setTextColor(currentThemeBgColor);
+            } else {
+                btn.setBackgroundColor(Color.TRANSPARENT);
+                btn.setTextColor(currentThemeColor);
+            }
+        }
+        
+        // Symbol buttons
+        android.widget.LinearLayout symbolContainer = findViewById(R.id.symbolContainer);
+        if (symbolContainer != null) {
+            for (int i = 0; i < symbolContainer.getChildCount(); i++) {
+                android.view.View child = symbolContainer.getChildAt(i);
+                if (child instanceof TextView) {
+                    TextView tv = (TextView) child;
+                    if (tv.hasFocus()) {
+                        tv.setBackgroundColor(currentThemeColor);
+                        tv.setTextColor(currentThemeBgColor);
+                    } else {
+                        tv.setBackgroundColor(Color.TRANSPARENT);
+                        tv.setTextColor(currentThemeColor);
+                    }
+                }
+            }
+        }
+
+
+    }
+
+    private void setupKeyboardAnimationListener() {
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(binding.main, (v, insets) -> {
+            boolean isKeyboardVisible = insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime());
+            
+            // Animate layout changes smoothly
+            androidx.transition.TransitionManager.beginDelayedTransition(binding.bottomToolbarArea);
+            if (isKeyboardVisible) {
+                binding.controlButtonsArea.setVisibility(android.view.View.GONE);
+            } else {
+                binding.controlButtonsArea.setVisibility(android.view.View.VISIBLE);
+            }
+            
+            return insets;
+        });
+    }
+
+    private void setupRotationListener() {
+        binding.fabRotate.setOnClickListener(v -> {
+            if (targetManualOrientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE) {
+                setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+            } else if (targetManualOrientation == android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT) {
+                setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+            }
+            binding.fabRotate.setVisibility(android.view.View.GONE);
+        });
+
+        orientationEventListener = new android.view.OrientationEventListener(this) {
+            @Override
+            public void onOrientationChanged(int orientation) {
+                if (orientation == ORIENTATION_UNKNOWN) {
+                    return;
+                }
+
+                // Check if system auto-rotate is OFF
+                boolean isAutoRotateOff = false;
+                try {
+                    isAutoRotateOff = android.provider.Settings.System.getInt(
+                        getContentResolver(),
+                        android.provider.Settings.System.ACCELEROMETER_ROTATION,
+                        0
+                    ) == 0;
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                if (!isAutoRotateOff) {
+                    binding.fabRotate.setVisibility(android.view.View.GONE);
+                    // Reset lock if it was set so it follows the system setting dynamically
+                    if (getRequestedOrientation() != android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                        setRequestedOrientation(android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                    }
+                    return;
+                }
+
+                int currentConfigOrientation = getResources().getConfiguration().orientation;
+
+                // Normalize physical orientation to 0 (portrait) or 90/270 (landscape)
+                // We add tolerance around the angles
+                boolean physicalIsLandscape = (orientation >= 60 && orientation <= 120) || (orientation >= 240 && orientation <= 300);
+                boolean physicalIsPortrait = (orientation >= 0 && orientation <= 30) || (orientation >= 330 && orientation <= 360);
+
+                if (physicalIsLandscape && currentConfigOrientation == android.content.res.Configuration.ORIENTATION_PORTRAIT) {
+                    // Physical is landscape, but screen is portrait -> suggest landscape rotation
+                    targetManualOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+                    binding.fabRotate.setVisibility(android.view.View.VISIBLE);
+                } else if (physicalIsPortrait && currentConfigOrientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
+                    // Physical is portrait, but screen is landscape -> suggest portrait rotation
+                    targetManualOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+                    binding.fabRotate.setVisibility(android.view.View.VISIBLE);
+                } else {
+                    // Screen orientation matches physical, or in intermediate angle -> hide suggestion
+                    binding.fabRotate.setVisibility(android.view.View.GONE);
+                }
+            }
+        };
+
+        if (orientationEventListener.canDetectOrientation()) {
+            orientationEventListener.enable();
+        }
     }
 
     /**
@@ -437,6 +1172,9 @@ public class MainActivity extends AppCompatActivity {
         // Execution result observer
         viewModel.getExecutionResult().observe(this, result -> {
             if (result != null) {
+                if (!result.isSuccess() && !result.shouldExitApp()) {
+                    triggerErrorFeedback();
+                }
                 // Check for exit signal
                 if (result.shouldExitApp()) {
                     finishAffinity(); // Close app completely
@@ -450,6 +1188,13 @@ public class MainActivity extends AppCompatActivity {
         // Database status observer - update prompt
         viewModel.getIsDatabaseOpen().observe(this, isOpen -> {
             updatePrompt();
+        });
+
+        // Observe schema suggestions from ViewModel
+        viewModel.getSchemaSuggestions().observe(this, suggestions -> {
+            if (suggestions != null) {
+                dbSchemaSuggestions = suggestions;
+            }
         });
 
         // Database name observer - update prompt
@@ -470,22 +1215,25 @@ public class MainActivity extends AppCompatActivity {
             }
         });
         
-        // Auto-open logic
-        java.io.File ecommerceFile = getDatabasePath("ecommerce.db");
-        java.io.File worldFile = getDatabasePath("world.db");
-        
-        if (!ecommerceFile.exists() || !worldFile.exists()) {
-            // First run (or data cleared or new DB added): Generate ALL sample data
-            viewModel.generateSampleDatabase();
-            // Save as default for next time
-            getSharedPreferences("DroidSQL", MODE_PRIVATE)
-                .edit()
-                .putString("last_db", "ecommerce.db")
-                .apply();
-        } else {
-            // Normal run: Open last used database
-            String lastDb = getSharedPreferences("DroidSQL", MODE_PRIVATE).getString("last_db", "ecommerce.db");
-            viewModel.createOrOpenDatabase(lastDb);
+        // Auto-open logic - only run if database is not already open (avoids duplicate open on screen rotation)
+        Boolean isOpen = viewModel.getIsDatabaseOpen().getValue();
+        if (isOpen == null || !isOpen) {
+            java.io.File ecommerceFile = getDatabasePath("ecommerce.db");
+            java.io.File worldFile = getDatabasePath("world.db");
+            
+            if (!ecommerceFile.exists() || !worldFile.exists()) {
+                // First run (or data cleared or new DB added): Generate ALL sample data
+                viewModel.generateSampleDatabase();
+                // Save as default for next time
+                getSharedPreferences("DroidSQL", MODE_PRIVATE)
+                    .edit()
+                    .putString("last_db", "ecommerce.db")
+                    .apply();
+            } else {
+                // Normal run: Open last used database
+                String lastDb = getSharedPreferences("DroidSQL", MODE_PRIVATE).getString("last_db", "ecommerce.db");
+                viewModel.createOrOpenDatabase(lastDb);
+            }
         }
     }
 
@@ -493,9 +1241,21 @@ public class MainActivity extends AppCompatActivity {
      * Updates the command prompt indicator (MySQL-style)
      */
     private void updatePrompt() {
-        // Always show 'mysql>' prompt like real MySQL
-        binding.tvPrompt.setText("mysql>");
-        binding.tvPrompt.setTextColor(getResources().getColor(R.color.terminal_success, null));
+        String text = binding.etSqlInput.getText().toString();
+        int newlineCount = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                newlineCount++;
+            }
+        }
+        
+        StringBuilder promptBuilder = new StringBuilder("mysql>");
+        for (int i = 0; i < newlineCount; i++) {
+            promptBuilder.append("\n   ->");
+        }
+        
+        binding.tvPrompt.setText(promptBuilder.toString());
+        binding.tvPrompt.setTextColor(binding.etSqlInput.getCurrentTextColor());
     }
 
     /**
@@ -543,6 +1303,12 @@ public class MainActivity extends AppCompatActivity {
         try {
             // Inflate custom layout
             android.view.View dialogView = getLayoutInflater().inflate(R.layout.dialog_templates, null);
+            dialogView.setBackgroundColor(currentThemeBgColor);
+            
+            TextView tvTitle = dialogView.findViewById(R.id.tvTemplatesTitle);
+            if (tvTitle != null) {
+                tvTitle.setTextColor(currentThemeColor);
+            }
             
             android.app.AlertDialog dialog = new android.app.AlertDialog.Builder(this)
                 .setView(dialogView)
@@ -563,9 +1329,8 @@ public class MainActivity extends AppCompatActivity {
                 item.setText(names[i]);
                 item.setTextSize(16f);
                 
-                // Safe Color Retrieval
-                int color = androidx.core.content.ContextCompat.getColor(this, R.color.terminal_text);
-                item.setTextColor(color);
+                // Set text color to current theme color
+                item.setTextColor(currentThemeColor);
                 
                 item.setPadding(32, 24, 32, 24); // px values
                 item.setTypeface(Typeface.MONOSPACE);
@@ -590,22 +1355,24 @@ public class MainActivity extends AppCompatActivity {
                     android.widget.LinearLayout.LayoutParams params = new android.widget.LinearLayout.LayoutParams(
                         android.view.ViewGroup.LayoutParams.MATCH_PARENT, 2); // 2px height for visibility
                     divider.setLayoutParams(params);
-                    divider.setBackgroundColor(0xFF333333); // Dark Gray
+                    divider.setBackgroundColor((currentThemeColor & 0x00FFFFFF) | 0x33000000); // 20% opacity theme color
                     listContainer.addView(divider);
                 }
             }
             
             // Setup Action Buttons with error handling
-            android.view.View btnSample = dialogView.findViewById(R.id.btnActionSample);
+            TextView btnSample = dialogView.findViewById(R.id.btnActionSample);
             if (btnSample != null) {
+                btnSample.setTextColor(currentThemeColor);
                 btnSample.setOnClickListener(v -> {
                     viewModel.generateSampleDatabase();
                     dialog.dismiss();
                 });
             }
             
-            android.view.View btnTips = dialogView.findViewById(R.id.btnActionTips);
+            TextView btnTips = dialogView.findViewById(R.id.btnActionTips);
             if (btnTips != null) {
+                btnTips.setTextColor(currentThemeColor);
                 btnTips.setOnClickListener(v -> {
                     showPerformanceTips();
                 });
@@ -637,7 +1404,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // ViewModel automatically closes database in onCleared()
+        if (orientationEventListener != null) {
+            orientationEventListener.disable();
+        }
     }
     /**
      * Sets up long-press to copy terminal output.
@@ -700,11 +1469,13 @@ public class MainActivity extends AppCompatActivity {
                 textView.setPadding(30, 20, 30, 20);
                 textView.setTextSize(16f);
                 textView.setTypeface(Typeface.MONOSPACE);
-                textView.setTextColor(0xFF00FF00); // Terminal Green
-                textView.setBackgroundColor(Color.BLACK); // Terminal Black
             } else {
                 textView = (TextView) convertView;
             }
+
+            // Apply current theme colors dynamically
+            textView.setTextColor(currentThemeColor);
+            textView.setBackgroundColor(currentThemeBgColor);
 
             String item = getItem(position);
             // Add icon/symbol for visual flair
