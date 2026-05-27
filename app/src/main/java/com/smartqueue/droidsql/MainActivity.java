@@ -18,6 +18,9 @@ import androidx.lifecycle.ViewModelProvider;
 import com.smartqueue.droidsql.model.QueryResult;
 import com.smartqueue.droidsql.utils.SQLTemplateHelper;
 import com.smartqueue.droidsql.viewmodel.DatabaseViewModel;
+import android.widget.ListPopupWindow;
+import android.widget.ArrayAdapter;
+import java.util.ArrayList;
 import com.smartqueue.droidsql.databinding.ActivityMainBinding;
 
 import java.util.List;
@@ -35,6 +38,10 @@ public class MainActivity extends AppCompatActivity {
 
     private ActivityMainBinding binding;
     private DatabaseViewModel viewModel;
+    
+    // Autocomplete
+    private ListPopupWindow suggestionPopup;
+    private TerminalAdapter suggestionAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,6 +56,8 @@ public class MainActivity extends AppCompatActivity {
 
         // Setup UI listeners
         setupListeners();
+        setupAutocomplete();
+        setupTerminalCopy();
 
         // Observe LiveData for reactive UI updates
         observeViewModel();
@@ -84,13 +93,16 @@ public class MainActivity extends AppCompatActivity {
                     return false; // Let system handle new line
                 }
                 
-                String sql = binding.etSqlInput.getText().toString().trim();
+                // 1. Get text and clean non-breaking spaces
+                String rawSql = binding.etSqlInput.getText().toString();
+                String sql = rawSql.replace("\u00A0", " ").trim();
                 
-                // STANDARD: Only execute if command ends with semicolon (;)
+                // IMPROVED: Check if semicolon exists ANYWHERE (allows spaces after ; and cursor at any position)
                 // Also allow strict EXIT/QUIT without semicolon for convenience
-                if (!sql.isEmpty() && (sql.endsWith(";") || 
-                    sql.equalsIgnoreCase("EXIT") || 
-                    sql.equalsIgnoreCase("QUIT"))) {
+                boolean hasSemicolon = sql.contains(";");
+                boolean isExitCommand = sql.equalsIgnoreCase("EXIT") || sql.equalsIgnoreCase("QUIT");
+                
+                if (!sql.isEmpty() && (hasSemicolon || isExitCommand)) {
                     
                     viewModel.executeSQL(sql);
                     binding.etSqlInput.setText("");
@@ -111,29 +123,87 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 if (count == 1 && s.length() > start && s.charAt(start) == '\n') {
-                    // Newline detected
-                    String currentText = binding.etSqlInput.getText().toString();
+                    // Newline detected at current cursor position
                     
-                    if (currentText.endsWith("\n")) {
-                        // Check content BEFORE the newline
-                        String rawSql = currentText.substring(0, currentText.length() - 1);
-                        String trimmedSql = rawSql.trim();
-                        
-                        // Execute ONLY if valid terminator found
-                        if (!trimmedSql.isEmpty() && (trimmedSql.endsWith(";") || 
-                             trimmedSql.equalsIgnoreCase("EXIT") || 
-                             trimmedSql.equalsIgnoreCase("QUIT"))) {
-                            
-                            viewModel.executeSQL(trimmedSql);
-                            binding.etSqlInput.setText("");
-                        }
-                        // Otherwise, let the newline stay (multiline input)
+                    // Get text and immediately remove the newline that was just inserted
+                    String textWithNewline = binding.etSqlInput.getText().toString();
+                    
+                    // 1. Replace newline with SPACE to prevent concatenation of keywords (e.g., "table\nWHERE" -> "tableWHERE")
+                    // 2. Replace non-breaking spaces (common on Android keyboards) with regular spaces
+                    String cleanText = textWithNewline.replace("\n", " ").replace("\u00A0", " ");
+                    
+                    // 3. Trim and normalize spaces before semicolon
+                    String trimmedSql = cleanText.trim();
+                    
+                    // Check execution conditions
+                    boolean hasSemicolon = trimmedSql.contains(";");
+                    boolean isExitCommand = trimmedSql.equalsIgnoreCase("EXIT") || trimmedSql.equalsIgnoreCase("QUIT");
+                    boolean isTrigger = trimmedSql.toUpperCase().startsWith("CREATE TRIGGER");
+                    boolean isTriggerComplete = isTrigger && trimmedSql.toUpperCase().endsWith("END;");
+                    
+                    // Logic: 
+                    // 1. Normal command: Execute if it has semicolon
+                    // 2. Trigger command: Execute ONLY if it ends with "END;"
+                    boolean shouldExecute = (!isTrigger && hasSemicolon) || (isTrigger && isTriggerComplete) || isExitCommand;
+                    
+                    if (!trimmedSql.isEmpty() && shouldExecute) {
+                        // Execute and clear
+                        viewModel.executeSQL(trimmedSql);
+                        binding.etSqlInput.setText("");
+                    } else {
+                        // No semicolon - allow newline for multiline input
+                        // Do nothing, let the newline stay
                     }
                 }
             }
 
             @Override
-            public void afterTextChanged(android.text.Editable s) {}
+            public void afterTextChanged(android.text.Editable s) {
+                if (suggestionPopup == null) return;
+                
+                String text = s.toString();
+                int cursorPos = binding.etSqlInput.getSelectionStart();
+                
+                // Find current word being typed
+                int wordStart = cursorPos;
+                while (wordStart > 0 && (Character.isLetterOrDigit(text.charAt(wordStart - 1)) || text.charAt(wordStart - 1) == '_')) {
+                    wordStart--;
+                }
+                
+                if (cursorPos <= wordStart) {
+                    suggestionPopup.dismiss();
+                    return;
+                }
+                
+                String currentWord = text.substring(wordStart, cursorPos);
+                
+                // Filter suggestions
+                if (currentWord.length() >= 1) { // Changed to >= 1 to allow 'I' -> IN, 'A' -> AS
+                    List<String> matches = new ArrayList<>();
+                    String upperWord = currentWord.toUpperCase();
+                    
+                    for (String keyword : SQLTemplateHelper.getKeywords()) {
+                        // Allow exact matches to enable auto-casing (typing 'sel' -> 'SELECT ')
+                        if (keyword.startsWith(upperWord)) {
+                            matches.add(keyword);
+                        }
+                    }
+                    
+                    if (!matches.isEmpty()) {
+                        suggestionAdapter.clear();
+                        suggestionAdapter.addAll(matches);
+                        suggestionAdapter.notifyDataSetChanged();
+                        
+                        // Approx width logic or fixed
+                        suggestionPopup.setWidth(500);
+                        suggestionPopup.show();
+                    } else {
+                        suggestionPopup.dismiss();
+                    }
+                } else {
+                    suggestionPopup.dismiss();
+                }
+            }
         });
 
         // Navigate to previous command - O(1)
@@ -227,7 +297,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showFontSizeDialog() {
-        String[] fonts = {"Small (10sp)", "Medium (13sp)", "Large (16sp)", "Extra Large (20sp)"};
+        String[] fonts = {"very Small (6sp)", "Small (10sp)", "Medium (13sp)", "Large (16sp)", "Extra Large (20sp)", "Extra Extra Large (24sp)"};
         int currentSize = getSharedPreferences("DroidSQL", MODE_PRIVATE).getInt("font_size_index", 1);
 
         new androidx.appcompat.app.AlertDialog.Builder(this)
@@ -264,17 +334,19 @@ public class MainActivity extends AppCompatActivity {
 
     private void loadSettings() {
         android.content.SharedPreferences prefs = getSharedPreferences("DroidSQL", MODE_PRIVATE);
-        applyFontSize(prefs.getInt("font_size_index", 1));
+        applyFontSize(prefs.getInt("font_size_index", 2)); // Default: Medium (13sp)
         applyTheme(prefs.getInt("theme_index", 0));
     }
 
     private void applyFontSize(int index) {
         float size;
         switch (index) {
-            case 0: size = 10f; break;
-            case 1: size = 13f; break; // Default
-            case 2: size = 16f; break;
-            case 3: size = 20f; break;
+            case 0: size = 6f; break;   // Very Small
+            case 1: size = 10f; break;  // Small
+            case 2: size = 13f; break;  // Medium (Default)
+            case 3: size = 16f; break;  // Large
+            case 4: size = 20f; break;  // Extra Large
+            case 5: size = 24f; break;  // Extra Extra Large
             default: size = 13f;
         }
         
@@ -307,6 +379,46 @@ public class MainActivity extends AppCompatActivity {
         binding.btnListTables.setTextColor(color);
         binding.btnExport.setTextColor(color);
         binding.btnSettings.setTextColor(color);
+    }
+
+    /**
+     * Sets up realtime autocomplete suggestions.
+     */
+    private void setupAutocomplete() {
+        suggestionPopup = new ListPopupWindow(this);
+        suggestionPopup.setAnchorView(binding.etSqlInput);
+        
+        // Use custom adapter for Terminal Theme matching
+        suggestionAdapter = new TerminalAdapter(this, new ArrayList<>());
+        suggestionPopup.setAdapter(suggestionAdapter);
+        suggestionPopup.setModal(false);
+        // Add vertical offset to not block current line
+        suggestionPopup.setVerticalOffset(10);
+        suggestionPopup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0xFF111111)); // Dark Gray Background
+
+        suggestionPopup.setOnItemClickListener((parent, view, position, id) -> {
+            String suggestion = suggestionAdapter.getItem(position);
+            if (suggestion != null) {
+                int cursorPos = binding.etSqlInput.getSelectionStart();
+                String text = binding.etSqlInput.getText().toString();
+                
+                // Find word start
+                int wordStart = cursorPos;
+                while (wordStart > 0 && (Character.isLetterOrDigit(text.charAt(wordStart - 1)) || text.charAt(wordStart - 1) == '_')) {
+                    wordStart--;
+                }
+                
+                // Replace partial word with suggestion + space
+                String before = text.substring(0, wordStart);
+                String after = text.substring(cursorPos);
+                
+                String replacement = suggestion + " ";
+                binding.etSqlInput.setText(before + replacement + after);
+                binding.etSqlInput.setSelection(before.length() + replacement.length());
+                
+                suggestionPopup.dismiss();
+            }
+        });
     }
 
     /**
@@ -359,9 +471,11 @@ public class MainActivity extends AppCompatActivity {
         });
         
         // Auto-open logic
-        java.io.File dbFile = getDatabasePath("ecommerce.db");
-        if (!dbFile.exists()) {
-            // First run (or data cleared): Generate sample data
+        java.io.File ecommerceFile = getDatabasePath("ecommerce.db");
+        java.io.File worldFile = getDatabasePath("world.db");
+        
+        if (!ecommerceFile.exists() || !worldFile.exists()) {
+            // First run (or data cleared or new DB added): Generate ALL sample data
             viewModel.generateSampleDatabase();
             // Save as default for next time
             getSharedPreferences("DroidSQL", MODE_PRIVATE)
@@ -524,5 +638,79 @@ public class MainActivity extends AppCompatActivity {
     protected void onDestroy() {
         super.onDestroy();
         // ViewModel automatically closes database in onCleared()
+    }
+    /**
+     * Sets up long-press to copy terminal output.
+     */
+    private void setupTerminalCopy() {
+        binding.tvTerminalOutput.setOnLongClickListener(v -> {
+            String content = binding.tvTerminalOutput.getText().toString();
+            if (!content.isEmpty()) {
+                android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+                android.content.ClipData clip = android.content.ClipData.newPlainText("PocketSQL Output", content);
+                clipboard.setPrimaryClip(clip);
+                Toast.makeText(this, "Terminal output copied to clipboard", Toast.LENGTH_SHORT).show();
+            }
+            return true;
+        });
+    }
+
+    /**
+     * Custom Adapter to style suggestions like valid Terminal/MySQL Workbench.
+     */
+    private class TerminalAdapter extends android.widget.BaseAdapter {
+        private final android.content.Context context;
+        private final List<String> items;
+
+        public TerminalAdapter(android.content.Context context, List<String> items) {
+            this.context = context;
+            this.items = items;
+        }
+
+        public void clear() {
+            items.clear();
+            notifyDataSetChanged();
+        }
+
+        public void addAll(List<String> newItems) {
+            items.addAll(newItems);
+            notifyDataSetChanged();
+        }
+
+        @Override
+        public int getCount() {
+            return items.size();
+        }
+
+        @Override
+        public String getItem(int position) {
+            return items.get(position);
+        }
+
+        @Override
+        public long getItemId(int position) {
+            return position;
+        }
+
+        @Override
+        public android.view.View getView(int position, android.view.View convertView, android.view.ViewGroup parent) {
+            TextView textView;
+            if (convertView == null) {
+                textView = new TextView(context);
+                textView.setPadding(30, 20, 30, 20);
+                textView.setTextSize(16f);
+                textView.setTypeface(Typeface.MONOSPACE);
+                textView.setTextColor(0xFF00FF00); // Terminal Green
+                textView.setBackgroundColor(Color.BLACK); // Terminal Black
+            } else {
+                textView = (TextView) convertView;
+            }
+
+            String item = getItem(position);
+            // Add icon/symbol for visual flair
+            textView.setText("➜ " + item);
+            
+            return textView;
+        }
     }
 }

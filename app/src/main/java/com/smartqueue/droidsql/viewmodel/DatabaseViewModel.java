@@ -54,7 +54,7 @@ public class DatabaseViewModel extends AndroidViewModel {
         terminalLog = new StringBuilder();
         
         // Welcome message (MySQL-style)
-        appendToTerminal("Welcome to PocketSQL (MySQL Mode)\n");
+        appendToTerminal("Welcome to DroidSQL (MySQL Mode)\n");
         appendToTerminal("Type 'help;' for help. Commands end with ; or \\n\n");
     }
 
@@ -136,15 +136,23 @@ public class DatabaseViewModel extends AndroidViewModel {
                     output.append(formatAsAsciiTable(result));
                     output.append(result.getRowsAffected() + " row" + 
                         (result.getRowsAffected() == 1 ? "" : "s") + " in set");
-                    if (result.getExecutionTimeMs() > 0) {
+                    
+                    // Show time for SELECT (always)
+                    double seconds = result.getExecutionTimeMs() / 1000.0;
+                    output.append(String.format(" (%.2f sec)", seconds));
+                    output.append("\n");
+                }
+                // Regular success message (INSERT/UPDATE/DELETE/CREATE)
+                else {
+                    String msg = result.getMessage();
+                    output.append(msg);
+                    
+                    // Append time if not already present and if it's a standard success message
+                    if (!msg.contains("sec)")) {
                         double seconds = result.getExecutionTimeMs() / 1000.0;
                         output.append(String.format(" (%.2f sec)", seconds));
                     }
                     output.append("\n");
-                }
-                // Regular success message
-                else {
-                    output.append(result.getMessage() + "\n");
                 }
                 output.append("\n");
                 postToTerminal(output.toString());
@@ -395,39 +403,49 @@ public class DatabaseViewModel extends AndroidViewModel {
      * Generates a sample E-commerce database.
      * Async operation.
      */
+    /**
+     * Generates sample E-commerce and World databases.
+     * Async operation.
+     */
     public void generateSampleDatabase() {
         executor.execute(() -> {
-            String dbName = "ecommerce.db";
-            
-            // 1. Create/Open Database
-            boolean openSuccess = databaseManager.openOrCreateDatabase(dbName);
-            if (!openSuccess) {
-                postToTerminal("[ERROR] Failed to create sample database\n");
-                return;
-            }
-            
-            // Notify UI of open
-            isDatabaseOpen.postValue(true);
-            currentDatabaseName.postValue(dbName);
-            postToTerminal("[SUCCESS] Created database '" + dbName + "'\n");
-            postToTerminal("Generating sample data (Tables: users, products, orders...)\n");
+            postToTerminal("Initializing default databases...\n");
 
-            // 2. Get SQL commands
-            java.util.List<String> commands = com.smartqueue.droidsql.utils.SampleDatabaseGenerator.getEcommerceSQL();
-            
-            // 3. Execute commands
-            int successCount = 0;
-            for (String sql : commands) {
-                QueryResult result = databaseManager.executeSQL(sql);
-                if (result.isSuccess()) {
-                    successCount++;
-                } else {
-                    postToTerminal("[WARNING] Failed: " + sql + " -> " + result.getMessage() + "\n");
+            // --- 1. Generate E-Commerce Database ---
+            String ecommerceDb = "ecommerce.db";
+            if (databaseManager.openOrCreateDatabase(ecommerceDb)) {
+                List<String> commands = com.smartqueue.droidsql.utils.SampleDatabaseGenerator.getEcommerceSQL();
+                int successCount = 0;
+                for (String sql : commands) {
+                    if (databaseManager.executeSQL(sql).isSuccess()) successCount++;
                 }
+                postToTerminal("[SUCCESS] Created 'ecommerce' database (" + successCount + " objects)\n");
+            } else {
+                postToTerminal("[ERROR] Failed to create 'ecommerce' database\n");
+            }
+
+            // --- 2. Generate World Database ---
+            String worldDb = "world.db";
+            if (databaseManager.openOrCreateDatabase(worldDb)) {
+                List<String> commands = com.smartqueue.droidsql.utils.SampleDatabaseGenerator.getWorldSQL();
+                int successCount = 0;
+                for (String sql : commands) {
+                     if (databaseManager.executeSQL(sql).isSuccess()) successCount++;
+                }
+                postToTerminal("[SUCCESS] Created 'world' database (" + successCount + " objects)\n");
+            } else {
+                postToTerminal("[ERROR] Failed to create 'world' database\n");
             }
             
-            postToTerminal("[SUCCESS] Sample database ready! (" + successCount + " commands executed)\n");
-            postToTerminal("Try: SHOW TABLES; or SELECT * FROM products;\n\n");
+            // --- 3. Finish up (Switch back to ecommerce as default) ---
+            databaseManager.openOrCreateDatabase(ecommerceDb);
+            isDatabaseOpen.postValue(true);
+            currentDatabaseName.postValue(ecommerceDb);
+            
+            postToTerminal("\nDatabases ready. Try:\n");
+            postToTerminal("  > USE ecommerce; \n");
+            postToTerminal("  > USE world;\n");
+            postToTerminal("  > SHOW TABLES;\n\n");
         });
     }
 
