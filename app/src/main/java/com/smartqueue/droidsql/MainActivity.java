@@ -110,6 +110,14 @@ public class MainActivity extends AppCompatActivity {
 
         // Check and request storage permissions if on Android 12L or lower
         checkAndRequestPermissions();
+
+        // Enable screenshot and screen recording protection
+        com.smartqueue.droidsql.utils.SecurityUtils.preventScreenshots(this);
+
+        // Root device safety warning
+        if (com.smartqueue.droidsql.utils.SecurityUtils.isDeviceRooted()) {
+            showRootWarningDialog();
+        }
     }
 
     /**
@@ -493,6 +501,7 @@ public class MainActivity extends AppCompatActivity {
         boolean lineWrap = prefs.getBoolean("line_wrap", true);
         boolean vibrate = prefs.getBoolean("vibrate_on_error", true);
         boolean autoClose = prefs.getBoolean("auto_close_pairs", true);
+        boolean apiRunning = viewModel.isApiServerRunning();
 
         String[] options = {
             "📖 SQL Learning Guide",
@@ -500,7 +509,8 @@ public class MainActivity extends AppCompatActivity {
             "Color Theme",
             "Line Wrapping: " + (lineWrap ? "ON" : "OFF"),
             "Vibrate on Error: " + (vibrate ? "ON" : "OFF"),
-            "Auto-Close Pairs: " + (autoClose ? "ON" : "OFF")
+            "Auto-Close Pairs: " + (autoClose ? "ON" : "OFF"),
+            "🌐 SQL REST API: " + (apiRunning ? "RUNNING" : "STOPPED")
         };
         
         new androidx.appcompat.app.AlertDialog.Builder(this)
@@ -522,10 +532,89 @@ public class MainActivity extends AppCompatActivity {
                 } else if (which == 5) {
                     prefs.edit().putBoolean("auto_close_pairs", !autoClose).apply();
                     Toast.makeText(this, "Auto-close pairs " + (!autoClose ? "enabled" : "disabled"), Toast.LENGTH_SHORT).show();
+                } else if (which == 6) {
+                    if (apiRunning) {
+                        viewModel.stopApiServer();
+                        Toast.makeText(this, "REST API Server stopped", Toast.LENGTH_SHORT).show();
+                    } else {
+                        viewModel.startApiServer();
+                        showApiServerDetailsDialog();
+                    }
                 }
             })
             .setNegativeButton("Close", null)
             .show();
+    }
+
+    private void showApiServerDetailsDialog() {
+        String ip = viewModel.getLocalIpAddress();
+        int port = viewModel.getApiServerPort();
+        String token = viewModel.getApiServerToken();
+        String baseUrl = "http://" + ip + ":" + port;
+
+        android.widget.ScrollView scrollView = new android.widget.ScrollView(this);
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(40, 40, 40, 40);
+        layout.setBackgroundColor(currentThemeBgColor);
+
+        TextView tvTitle = new TextView(this);
+        tvTitle.setText("🌐 REST API Server Details");
+        tvTitle.setTextSize(20f);
+        tvTitle.setTextColor(currentThemeColor);
+        tvTitle.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        tvTitle.setPadding(0, 0, 0, 30);
+        layout.addView(tvTitle);
+
+        TextView tvDetails = new TextView(this);
+        tvDetails.setTextSize(14f);
+        tvDetails.setTextColor(currentThemeColor);
+        tvDetails.setTypeface(Typeface.MONOSPACE);
+        
+        StringBuilder details = new StringBuilder();
+        details.append("Status:    RUNNING\n");
+        details.append("IP Addr:   ").append(ip).append("\n");
+        details.append("Port:      ").append(port).append("\n");
+        details.append("Base URL:  ").append(baseUrl).append("\n");
+        details.append("Token:     ").append(token).append("\n\n");
+        details.append("--- Authentication ---\n");
+        details.append("Send 'X-API-Key' header or 'token' query param.\n\n");
+        details.append("--- Example GET Command ---\n");
+        details.append("curl -H \"X-API-Key: ").append(token).append("\" \"").append(baseUrl).append("/query?sql=SELECT+*+FROM+sqlite_master;\"\n\n");
+        details.append("--- Example POST Command ---\n");
+        details.append("curl -X POST -H \"Content-Type: application/json\" -H \"X-API-Key: ").append(token).append("\" -d \"{\\\"sql\\\": \\\"SELECT * FROM sqlite_master;\\\"}\" ").append(baseUrl).append("/query\n\n");
+        details.append("(Long press anywhere in terminal to copy output. API endpoints: /status, /query)");
+        
+        tvDetails.setText(details.toString());
+        layout.addView(tvDetails);
+
+        android.widget.Button btnCopy = new android.widget.Button(this);
+        btnCopy.setText("Copy Token");
+        btnCopy.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF333333));
+        btnCopy.setTextColor(Color.WHITE);
+        btnCopy.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(android.content.Context.CLIPBOARD_SERVICE);
+            android.content.ClipData clip = android.content.ClipData.newPlainText("DroidSQL API Token", token);
+            clipboard.setPrimaryClip(clip);
+            Toast.makeText(this, "Token copied!", Toast.LENGTH_SHORT).show();
+        });
+        android.widget.LinearLayout.LayoutParams btnParams = new android.widget.LinearLayout.LayoutParams(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        btnParams.topMargin = 20;
+        btnCopy.setLayoutParams(btnParams);
+        layout.addView(btnCopy);
+
+        scrollView.addView(layout);
+
+        androidx.appcompat.app.AlertDialog dialog = new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setView(scrollView)
+            .setPositiveButton("Close", null)
+            .create();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Color.TRANSPARENT));
+        }
+        dialog.show();
     }
 
     private void showLearningGuideDialog() {
@@ -1729,8 +1818,9 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void checkAndRequestPermissions() {
+        List<String> permissionsNeeded = new ArrayList<>();
+        
         if (android.os.Build.VERSION.SDK_INT <= android.os.Build.VERSION_CODES.S_V2) {
-            List<String> permissionsNeeded = new ArrayList<>();
             if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE)
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(android.Manifest.permission.READ_EXTERNAL_STORAGE);
@@ -1739,10 +1829,28 @@ public class MainActivity extends AppCompatActivity {
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 permissionsNeeded.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
             }
-            
-            if (!permissionsNeeded.isEmpty()) {
-                permissionLauncher.launch(permissionsNeeded.toArray(new String[0]));
+        }
+        
+        if (android.os.Build.VERSION.SDK_INT >= 33) { // Build.VERSION_CODES.TIRAMISU is 33
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS")
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add("android.permission.POST_NOTIFICATIONS");
             }
         }
+        
+        if (!permissionsNeeded.isEmpty()) {
+            permissionLauncher.launch(permissionsNeeded.toArray(new String[0]));
+        }
+    }
+
+    private void showRootWarningDialog() {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("⚠️ Security Warning")
+            .setMessage("This device appears to be ROOTED. Root access compromises Android's sandbox security. " +
+                        "Your database files and master encryption keys could be vulnerable to extraction by other applications " +
+                        "or malicious software. Please exercise caution when working with sensitive databases.")
+            .setPositiveButton("I Understand", null)
+            .setIcon(android.R.drawable.ic_dialog_alert)
+            .show();
     }
 }

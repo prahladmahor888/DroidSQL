@@ -97,6 +97,12 @@ public class ExampleUnitTest {
     }
 
     @Test
+    public void testExportDatabase_noDatabase() {
+        DatabaseManager dbManager = new DatabaseManager(null);
+        assertNotNull(dbManager.exportDatabase());
+    }
+
+    @Test
     public void testSQLImportHelper_isValidSQLiteHeader() throws Exception {
         byte[] valid = "SQLite format 3\0".getBytes();
         assertTrue(com.smartqueue.droidsql.utils.SQLImportHelper.isValidSQLiteHeader(new java.io.ByteArrayInputStream(valid)));
@@ -151,5 +157,43 @@ public class ExampleUnitTest {
         // Test comments at the beginning of custom commands
         String sql6 = "-- Create Database\nCREATE DATABASE student_management;";
         assertEquals("CREATE DATABASE student_management;", DatabaseManager.stripComments(sql6).trim());
+    }
+
+    @Test
+    public void testAPIServer_generateToken() throws Exception {
+        com.smartqueue.droidsql.api.APIServer apiServer = new com.smartqueue.droidsql.api.APIServer(null);
+        Method tokenMethod = com.smartqueue.droidsql.api.APIServer.class.getDeclaredMethod("generateToken");
+        tokenMethod.setAccessible(true);
+        
+        String token = (String) tokenMethod.invoke(apiServer);
+        assertNotNull(token);
+        assertEquals(8, token.length());
+        
+        // Assert alphanumeric characters
+        assertTrue(token.matches("^[a-zA-Z0-9]+$"));
+    }
+
+    @Test
+    public void testAPIServer_parseQueryParams() throws Exception {
+        com.smartqueue.droidsql.api.APIServer apiServer = new com.smartqueue.droidsql.api.APIServer(null);
+        Method parseMethod = com.smartqueue.droidsql.api.APIServer.class.getDeclaredMethod("parseQueryParams", String.class);
+        parseMethod.setAccessible(true);
+        
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> params = (java.util.Map<String, String>) parseMethod.invoke(apiServer, "sql=SELECT+*+FROM+students&token=abc123xyz");
+        
+        assertNotNull(params);
+        assertEquals("SELECT * FROM students", params.get("sql"));
+        assertEquals("abc123xyz", params.get("token"));
+        
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> emptyParams = (java.util.Map<String, String>) parseMethod.invoke(apiServer, "");
+        assertNotNull(emptyParams);
+        assertTrue(emptyParams.isEmpty());
+        
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, String> nullParams = (java.util.Map<String, String>) parseMethod.invoke(apiServer, (String) null);
+        assertNotNull(nullParams);
+        assertTrue(nullParams.isEmpty());
     }
 }

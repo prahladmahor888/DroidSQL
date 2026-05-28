@@ -1,6 +1,7 @@
 package com.smartqueue.droidsql.viewmodel;
 
 import android.app.Application;
+import android.content.Intent;
 import androidx.annotation.NonNull;
 import androidx.lifecycle.AndroidViewModel;
 import androidx.lifecycle.LiveData;
@@ -45,7 +46,7 @@ public class DatabaseViewModel extends AndroidViewModel {
 
     public DatabaseViewModel(@NonNull Application application) {
         super(application);
-        databaseManager = new DatabaseManager(application.getApplicationContext());
+        databaseManager = DatabaseManager.getInstance(application.getApplicationContext());
         
         executionResult = new MutableLiveData<>();
         terminalOutput = new MutableLiveData<>();
@@ -344,11 +345,11 @@ public class DatabaseViewModel extends AndroidViewModel {
      * Complexity: O(N) where N = database file size
      */
     public void exportCurrentDatabase() {
-        boolean success = databaseManager.exportDatabase();
-        if (success) {
+        String error = databaseManager.exportDatabase();
+        if (error == null) {
             appendToTerminal("[SUCCESS] Database exported to Downloads folder\n\n");
         } else {
-            appendToTerminal("[ERROR] Failed to export database\n\n");
+            appendToTerminal("[ERROR] Failed to export database: " + error + "\n\n");
         }
     }
 
@@ -544,9 +545,95 @@ public class DatabaseViewModel extends AndroidViewModel {
         }
     }
 
+    private String generateRandomToken() {
+        java.security.SecureRandom random = new java.security.SecureRandom();
+        byte[] bytes = new byte[4];
+        random.nextBytes(bytes);
+        StringBuilder sb = new StringBuilder();
+        for (byte b : bytes) {
+            sb.append(String.format("%02x", b));
+        }
+        return sb.toString();
+    }
+
+    public void startApiServer() {
+        String token = generateRandomToken();
+        getApplication().getSharedPreferences("APISecurityPrefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putString("api_auth_token", token)
+                .commit();
+
+        Intent intent = new Intent(getApplication(), com.smartqueue.droidsql.api.APIService.class);
+        intent.setAction(com.smartqueue.droidsql.api.APIService.ACTION_START);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            getApplication().startForegroundService(intent);
+        } else {
+            getApplication().startService(intent);
+        }
+    }
+
+    public void stopApiServer() {
+        Intent intent = new Intent(getApplication(), com.smartqueue.droidsql.api.APIService.class);
+        intent.setAction(com.smartqueue.droidsql.api.APIService.ACTION_STOP);
+        getApplication().startService(intent);
+    }
+
+    public boolean isApiServerRunning() {
+        com.smartqueue.droidsql.api.APIServer server = com.smartqueue.droidsql.api.APIService.getApiServerInstance();
+        return server != null && server.isRunning();
+    }
+
+    public String getApiServerToken() {
+        return getApplication().getSharedPreferences("APISecurityPrefs", android.content.Context.MODE_PRIVATE)
+                .getString("api_auth_token", "");
+    }
+
+    public int getApiServerPort() {
+        com.smartqueue.droidsql.api.APIServer server = com.smartqueue.droidsql.api.APIService.getApiServerInstance();
+        return server != null ? server.getPort() : 8080;
+    }
+
+    public String getLocalIpAddress() {
+        try {
+            android.net.wifi.WifiManager wm = (android.net.wifi.WifiManager) getApplication().getApplicationContext().getSystemService(android.content.Context.WIFI_SERVICE);
+            if (wm != null) {
+                int ipAddress = wm.getConnectionInfo().getIpAddress();
+                if (ipAddress != 0) {
+                    return String.format(java.util.Locale.US, "%d.%d.%d.%d",
+                            (ipAddress & 0xff),
+                            (ipAddress >> 8 & 0xff),
+                            (ipAddress >> 16 & 0xff),
+                            (ipAddress >> 24 & 0xff));
+                }
+            }
+        } catch (Exception e) {
+            // Fallback to NetworkInterface
+        }
+        
+        try {
+            for (java.util.Enumeration<java.net.NetworkInterface> en = java.net.NetworkInterface.getNetworkInterfaces(); en.hasMoreElements();) {
+                java.net.NetworkInterface intf = en.nextElement();
+                for (java.util.Enumeration<java.net.InetAddress> enumIpAddr = intf.getInetAddresses(); enumIpAddr.hasMoreElements();) {
+                    java.net.InetAddress inetAddress = enumIpAddr.nextElement();
+                    if (!inetAddress.isLoopbackAddress()) {
+                        String ip = inetAddress.getHostAddress();
+                        if (ip != null && ip.indexOf(':') < 0) { // IPv4 check
+                            return ip;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+        return "127.0.0.1";
+    }
+
     @Override
     protected void onCleared() {
         super.onCleared();
-        databaseManager.closeDatabase();
+        if (!isApiServerRunning()) {
+            databaseManager.closeDatabase();
+        }
     }
 }

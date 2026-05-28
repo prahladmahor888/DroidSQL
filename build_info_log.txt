@@ -1,0 +1,48 @@
+WARNING: A restricted method in java.lang.System has been called
+WARNING: java.lang.System::load has been called by net.rubygrapefruit.platform.internal.NativeLibraryLoader in an unnamed module (file:/C:/Users/ASUS/.gradle/wrapper/dists/gradle-8.13-bin/5xuhj0ry160q40clulazy9h7d/gradle-8.13/lib/native-platform-0.22-milestone-28.jar)
+WARNING: Use --enable-native-access=ALL-UNNAMED to avoid a warning for callers in this module
+WARNING: Restricted methods will be blocked in a future release unless native access is enabled
+
+Initialized native services in: C:\Users\ASUS\.gradle\native
+Initialized jansi services in: C:\Users\ASUS\.gradle\native
+Found daemon DaemonInfo{pid=25748, address=[eafda611-145c-4ae3-b062-d245857460a4 port:61769, addresses:[/127.0.0.1]], state=Idle, lastBusy=1779958285448, context=DefaultDaemonContext[uid=54f6dd09-d7fc-4eec-b5a5-bbe3603ab5cf,javaHome=C:\Program Files\Android\Android Studio\jbr,javaVersion=21,javaVendor=JetBrains s.r.o.,daemonRegistryDir=C:\Users\ASUS\.gradle\daemon,pid=25748,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-Xmx2048m,-Dfile.encoding=UTF-8,-Duser.country=US,-Duser.language=en,-Duser.variant]} however its context does not match the desired criteria.
+JVM is incompatible.
+Wanted: DaemonRequestContext{jvmCriteria=C:\Program Files\Java\jdk-25.0.2 (no JDK specified, using current Java home), daemonOpts=[-Xmx2048m, -Dfile.encoding=UTF-8, -Duser.country=US, -Duser.language=en, -Duser.variant], applyInstrumentationAgent=true, nativeServicesMode=ENABLED, priority=NORMAL}
+Actual: DefaultDaemonContext[uid=54f6dd09-d7fc-4eec-b5a5-bbe3603ab5cf,javaHome=C:\Program Files\Android\Android Studio\jbr,javaVersion=21,javaVendor=JetBrains s.r.o.,daemonRegistryDir=C:\Users\ASUS\.gradle\daemon,pid=25748,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-Xmx2048m,-Dfile.encoding=UTF-8,-Duser.country=US,-Duser.language=en,-Duser.variant]
+
+  Looking for a different daemon...
+Removing daemon from the registry due to communication failure. Daemon information: DaemonInfo{pid=27392, address=[7f73b0a0-567c-445b-b616-dbec03b60130 port:52471, addresses:[/127.0.0.1]], state=Idle, lastBusy=1779958788379, context=DefaultDaemonContext[uid=db5e4914-854b-440e-8f85-ee86764a1b1d,javaHome=C:\Program Files\Java\jdk-25.0.2,javaVersion=25,javaVendor=Oracle Corporation,daemonRegistryDir=C:\Users\ASUS\.gradle\daemon,pid=27392,idleTimeout=10800000,priority=NORMAL,applyInstrumentationAgent=true,nativeServicesMode=ENABLED,daemonOpts=-Xmx2048m,-Dfile.encoding=UTF-8,-Duser.country=US,-Duser.language=en,-Duser.variant]}
+Removing 1 daemon stop events from registry
+Previous Daemon (25724) stopped at Thu May 28 13:46:56 IST 2026 by user or operating system
+Previous Daemon (17720) stopped at Thu May 28 14:28:47 IST 2026 by user or operating system
+Previous Daemon (26920) stopped at Thu May 28 14:29:13 IST 2026 by user or operating system
+Previous Daemon (3488) stopped at Thu May 28 14:29:46 IST 2026 by user or operating system
+Previous Daemon (27392) stopped at Thu May 28 14:30:22 IST 2026 by user or operating system
+Starting a Gradle Daemon, 2 incompatible and 5 stopped Daemons could not be reused, use --status for details
+Starting process 'Gradle build daemon'. Working directory: C:\Users\ASUS\.gradle\daemon\8.13 Command: C:\Program Files\Java\jdk-25.0.2\bin\java.exe --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.prefs/java.util.prefs=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports=jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.prefs/java.util.prefs=ALL-UNNAMED --add-opens=java.base/java.nio.charset=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.xml/javax.xml.namespace=ALL-UNNAMED -Xmx2048m -Dfile.encoding=UTF-8 -Duser.country=US -Duser.language=en -Duser.variant -cp C:\Users\ASUS\.gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13\lib\gradle-daemon-main-8.13.jar -javaagent:C:\Users\ASUS\.gradle\wrapper\dists\gradle-8.13-bin\5xuhj0ry160q40clulazy9h7d\gradle-8.13\lib\agents\gradle-instrumentation-agent-8.13.jar org.gradle.launcher.daemon.bootstrap.GradleDaemon 8.13
+Successfully started process 'Gradle build daemon'
+An attempt to start the daemon took 1.461 secs.
+The client will now receive all logging from the daemon (pid: 24488). The daemon log file: C:\Users\ASUS\.gradle\daemon\8.13\daemon-24488.out.log
+Starting build in new daemon [memory: 2 GiB]
+Using 16 worker leases.
+Received JVM installation metadata from 'C:\Program Files\Java\jdk-25.0.2': {JAVA_HOME=C:\Program Files\Java\jdk-25.0.2, JAVA_VERSION=25.0.2, JAVA_VENDOR=Oracle Corporation, RUNTIME_NAME=Java(TM) SE Runtime Environment, RUNTIME_VERSION=25.0.2+10-LTS-69, VM_NAME=Java HotSpot(TM) 64-Bit Server VM, VM_VERSION=25.0.2+10-LTS-69, VM_VENDOR=Oracle Corporation, OS_ARCH=amd64}
+Watching the file system is configured to be enabled if available
+Now considering [C:\Users\ASUS\AndroidStudioProjects\DroidSQL] as hierarchies to watch
+File system watching is active
+Starting Build
+Caching disabled for Kotlin DSL script compilation (Settings/TopLevel/stage1) because:
+  Build cache is disabled
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+25.0.2
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 5s
+Watched directory hierarchies: []

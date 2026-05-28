@@ -41,6 +41,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.activity)
     implementation(libs.constraintlayout)
+    implementation("net.zetetic:sqlcipher-android:4.5.4")
+    implementation("androidx.sqlite:sqlite:2.4.0")
     
     // ViewModel and LiveData for MVVM
     implementation("androidx.lifecycle:lifecycle-viewmodel:2.7.0")

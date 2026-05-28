@@ -1,7 +1,7 @@
 package com.smartqueue.droidsql.utils;
 
-import android.database.sqlite.SQLiteDatabase;
-import android.database.sqlite.SQLiteStatement;
+import net.zetetic.database.sqlcipher.SQLiteDatabase;
+import net.zetetic.database.sqlcipher.SQLiteStatement;
 import android.util.Xml;
 
 import com.smartqueue.droidsql.model.QueryResult;

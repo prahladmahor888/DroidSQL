@@ -2,7 +2,7 @@ package com.smartqueue.droidsql.model;
 
 import android.content.Context;
 import android.database.Cursor;
-import android.database.sqlite.SQLiteDatabase;
+import net.zetetic.database.sqlcipher.SQLiteDatabase;
 import android.database.sqlite.SQLiteException;
 import android.os.Environment;
 
@@ -33,6 +33,15 @@ public class DatabaseManager {
     private Context context;
     private String currentDatabaseName;
 
+    private static DatabaseManager instance;
+
+    public static synchronized DatabaseManager getInstance(Context context) {
+        if (instance == null) {
+            instance = new DatabaseManager(context.getApplicationContext());
+        }
+        return instance;
+    }
+
     public DatabaseManager(Context context) {
         this.context = context;
     }
@@ -47,7 +56,66 @@ public class DatabaseManager {
         }
         try {
             closeDatabase(); // Close any existing database
-            database = context.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null);
+            System.loadLibrary("sqlcipher");
+            File dbFile = context.getDatabasePath(dbName);
+            if (dbFile.getParentFile() != null) {
+                dbFile.getParentFile().mkdirs();
+            }
+            
+            String password = new com.smartqueue.droidsql.security.KeyManager(context).getDatabasePassword();
+            boolean opened = false;
+            
+            try {
+                database = SQLiteDatabase.openOrCreateDatabase(dbFile.getAbsolutePath(), password, null, null);
+                opened = true;
+            } catch (Exception e) {
+                // If opening failed and file exists, check if it's plaintext
+                if (dbFile.exists()) {
+                    SQLiteDatabase plaintextDb = null;
+                    try {
+                        plaintextDb = SQLiteDatabase.openDatabase(dbFile.getAbsolutePath(), "", null, SQLiteDatabase.OPEN_READWRITE, null);
+                    } catch (Exception ignored) {}
+                    
+                    if (plaintextDb != null) {
+                        File tempEncryptedFile = new File(dbFile.getParentFile(), dbName + ".tmp_enc");
+                        if (tempEncryptedFile.exists()) {
+                            tempEncryptedFile.delete();
+                        }
+                        
+                        try {
+                            // Attach temp encrypted file and export plaintext data into it
+                            plaintextDb.execSQL("ATTACH DATABASE '" + tempEncryptedFile.getAbsolutePath() + "' AS encrypted KEY '" + password + "';");
+                            Cursor cursor = plaintextDb.rawQuery("SELECT sqlcipher_export('encrypted');", null);
+                            if (cursor != null) {
+                                cursor.moveToFirst();
+                                cursor.close();
+                            }
+                            plaintextDb.execSQL("DETACH DATABASE encrypted;");
+                            plaintextDb.close();
+                            plaintextDb = null;
+                            
+                            // Delete plaintext file and rename temp encrypted file to original database name
+                            if (dbFile.delete()) {
+                                tempEncryptedFile.renameTo(dbFile);
+                                // Open the migrated encrypted database
+                                database = SQLiteDatabase.openOrCreateDatabase(dbFile.getAbsolutePath(), password, null, null);
+                                opened = true;
+                            }
+                        } catch (Exception migrationError) {
+                            if (plaintextDb != null) {
+                                plaintextDb.close();
+                            }
+                            if (tempEncryptedFile.exists()) {
+                                tempEncryptedFile.delete();
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (!opened) {
+                return false;
+            }
             
             // OPTIMIZATION: Enable Write-Ahead Logging (WAL)
             // Improves write performance and concurrency.
@@ -103,7 +171,8 @@ public class DatabaseManager {
                     if (dbAlias.isEmpty()) continue;
 
                     try {
-                        String attachCmd = "ATTACH DATABASE '" + file.getAbsolutePath() + "' AS " + dbAlias;
+                        String password = new com.smartqueue.droidsql.security.KeyManager(context).getDatabasePassword();
+                        String attachCmd = "ATTACH DATABASE '" + file.getAbsolutePath() + "' AS " + dbAlias + " KEY '" + password + "'";
                         db.execSQL(attachCmd);
                     } catch (Exception e) {
                         // Ignore attach failures (e.g. already attached or limit reached)
@@ -608,8 +677,8 @@ public class DatabaseManager {
                 return new QueryResult(false, "Database '" + targetDb + "' does not exist");
             }
             try {
-                // Open read-only connection to target DB
-                dbToUse = SQLiteDatabase.openDatabase(dbFile.getPath(), null, SQLiteDatabase.OPEN_READONLY);
+                String password = new com.smartqueue.droidsql.security.KeyManager(context).getDatabasePassword();
+                dbToUse = SQLiteDatabase.openOrCreateDatabase(dbFile.getAbsolutePath(), password, null, null);
                 isTempConnection = true;
                 dbNameForDisplay = targetDb;
             } catch (SQLiteException e) {
@@ -1604,62 +1673,89 @@ public class DatabaseManager {
      * Exports current database to Downloads folder.
      * Complexity: O(N) where N = database file size
      */
-    public boolean exportDatabase() {
+    public String exportDatabase() {
         if (currentDatabaseName == null) {
-            return false;
+            return "No database is currently loaded.";
         }
 
         File currentDB = context.getDatabasePath(currentDatabaseName);
         if (!currentDB.exists()) {
-            return false;
+            return "Database file does not exist at " + currentDB.getAbsolutePath();
         }
 
+        // Step 1: Temp plain file in internal cache (never visible to other apps)
+        File tempPlainFile = new File(context.getCacheDir(), currentDatabaseName + ".plain_export.tmp");
+        if (tempPlainFile.exists()) {
+            tempPlainFile.delete();
+        }
+
+        SQLiteDatabase dbToUse = null;
+
         try {
-            // Android 10 (Q) and above: Use MediaStore (Scoped Storage)
+            // Step 2: Open encrypted DB and export to a plain (no password) file.
+            // We always open a new connection to prevent leaving the database attached
+            // to the active connection in case of any failures.
+            String password = new com.smartqueue.droidsql.security.KeyManager(context).getDatabasePassword();
+            dbToUse = SQLiteDatabase.openOrCreateDatabase(
+                    currentDB.getAbsolutePath(), password, null, null);
+
+            dbToUse.execSQL(
+                "ATTACH DATABASE '" + tempPlainFile.getAbsolutePath() + "' AS plain_export_temp KEY ''");
+            Cursor cursor = dbToUse.rawQuery("SELECT sqlcipher_export('plain_export_temp')", null);
+            if (cursor != null) {
+                cursor.moveToFirst();
+                cursor.close();
+            }
+            dbToUse.execSQL("DETACH DATABASE plain_export_temp");
+
+            dbToUse.close();
+            dbToUse = null;
+
+            // Step 3: Copy the decrypted temp file to public Downloads folder
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                 android.content.ContentValues values = new android.content.ContentValues();
                 values.put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, currentDatabaseName);
-                values.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream"); // SQLite is binary
+                values.put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
                 values.put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
-
                 android.net.Uri uri = context.getContentResolver().insert(
                     android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-
                 if (uri == null) {
-                    return false;
+                    return "Failed to insert entry into MediaStore.Downloads. Relative path: " + Environment.DIRECTORY_DOWNLOADS;
                 }
-
-                try (java.io.InputStream in = new FileInputStream(currentDB);
+                try (java.io.InputStream in = new FileInputStream(tempPlainFile);
                      java.io.OutputStream out = context.getContentResolver().openOutputStream(uri)) {
-                    
-                    byte[] buffer = new byte[1024];
-                    int length;
-                    while ((length = in.read(buffer)) > 0) {
-                        out.write(buffer, 0, length);
+                    byte[] buf = new byte[4096];
+                    int len;
+                    while ((len = in.read(buf)) > 0) {
+                        out.write(buf, 0, len);
                     }
                 }
-                return true;
-            } 
-            // Older Android: Use Legacy File I/O (requires WRITE_EXTERNAL_STORAGE)
-            else {
-                File exportDir = Environment.getExternalStoragePublicDirectory(
-                    Environment.DIRECTORY_DOWNLOADS);
+            } else {
+                File exportDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
                 if (!exportDir.exists()) {
                     exportDir.mkdirs();
                 }
-
-                File exportDB = new File(exportDir, currentDatabaseName);
-
-                FileChannel src = new FileInputStream(currentDB).getChannel();
-                FileChannel dst = new FileOutputStream(exportDB).getChannel();
-                dst.transferFrom(src, 0, src.size());
-                src.close();
-                dst.close();
-                return true;
+                File exportFile = new File(exportDir, currentDatabaseName);
+                try (FileChannel src = new FileInputStream(tempPlainFile).getChannel();
+                     FileChannel dst = new FileOutputStream(exportFile).getChannel()) {
+                    dst.transferFrom(src, 0, src.size());
+                }
             }
-        } catch (IOException e) {
+            return null; // Success
+
+        } catch (Exception e) {
             e.printStackTrace();
-            return false;
+            return e.getMessage() != null ? e.getMessage() : e.toString();
+        } finally {
+            if (dbToUse != null && dbToUse.isOpen()) {
+                try {
+                    dbToUse.close();
+                } catch (Exception ignored) {}
+            }
+            // Step 4: Always delete the temporary plain file
+            if (tempPlainFile.exists()) {
+                tempPlainFile.delete();
+            }
         }
     }
 
