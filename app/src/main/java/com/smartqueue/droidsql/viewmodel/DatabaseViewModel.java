@@ -89,6 +89,33 @@ public class DatabaseViewModel extends AndroidViewModel {
     }
 
     /**
+     * Securely imports tabular data (CSV/XLSX) in the background.
+     */
+    public void importTabularData(String tableName, List<List<String>> data, boolean hasHeader) {
+        appendToTerminal("mysql> /* Importing data into " + tableName + " ... */\n");
+        executor.execute(() -> {
+            if (databaseManager.getDatabase() == null) {
+                postToTerminal("ERROR: No database is open. Please open or create a database first.\n\n");
+                return;
+            }
+
+            long startTime = System.currentTimeMillis();
+            QueryResult result = com.smartqueue.droidsql.utils.SQLImportHelper.importTabularData(
+                databaseManager.getDatabase(), tableName, data, hasHeader
+            );
+            long totalTime = System.currentTimeMillis() - startTime;
+
+            if (result.isSuccess()) {
+                refreshSchemaCache();
+                double seconds = totalTime / 1000.0;
+                postToTerminal(result.getMessage() + String.format(" (%.2f sec)\n\n", seconds));
+            } else {
+                postToTerminal(result.getMessage() + "\n\n");
+            }
+        });
+    }
+
+    /**
      * Executes a SQL command.
      * Use background thread to prevent UI blocking (ANR).
      * Complexity: O(1) on main thread (async dispatch)
@@ -203,18 +230,13 @@ public class DatabaseViewModel extends AndroidViewModel {
         StringBuilder output = new StringBuilder();
         List<String> columns = result.getColumnNames();
         List<List<String>> rows = result.getRows();
-        
-        // LIMIT OUTPUT to prevent UI freezing (O(N) -> O(1) perceived)
-        int MAX_DISPLAY_ROWS = 100;
-        boolean truncated = rows.size() > MAX_DISPLAY_ROWS;
-        List<List<String>> displayRows = truncated ? rows.subList(0, MAX_DISPLAY_ROWS) : rows;
 
         // Calculate column widths
         int[] widths = new int[columns.size()];
         for (int i = 0; i < columns.size(); i++) {
             widths[i] = columns.get(i).length();
         }
-        for (List<String> row : displayRows) {
+        for (List<String> row : rows) {
             for (int i = 0; i < row.size(); i++) {
                 String value = row.get(i);
                 if (value != null && value.length() > widths[i]) {
@@ -239,7 +261,7 @@ public class DatabaseViewModel extends AndroidViewModel {
         output.append(buildBorder(widths));
 
         // Build data rows
-        for (List<String> row : displayRows) {
+        for (List<String> row : rows) {
             output.append("|");
             for (int i = 0; i < row.size(); i++) {
                 output.append(" ");
@@ -253,10 +275,6 @@ public class DatabaseViewModel extends AndroidViewModel {
 
         // Build bottom border
         output.append(buildBorder(widths));
-        
-        if (truncated) {
-            output.append("... ").append(rows.size() - MAX_DISPLAY_ROWS).append(" more rows hidden for performance ...\n\n");
-        }
 
         return output.toString();
     }

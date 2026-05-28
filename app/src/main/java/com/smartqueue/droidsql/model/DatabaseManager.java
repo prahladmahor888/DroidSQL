@@ -42,6 +42,9 @@ public class DatabaseManager {
      * Complexity: O(1) - file open operation
      */
     public boolean openOrCreateDatabase(String dbName) {
+        if (dbName == null || dbName.contains("/") || dbName.contains("\\") || dbName.contains("..")) {
+            return false;
+        }
         try {
             closeDatabase(); // Close any existing database
             database = context.openOrCreateDatabase(dbName, Context.MODE_PRIVATE, null);
@@ -67,6 +70,10 @@ public class DatabaseManager {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    public SQLiteDatabase getDatabase() {
+        return database;
     }
 
     /**
@@ -122,12 +129,15 @@ public class DatabaseManager {
      * - Result conversion: O(N*M) for N rows and M columns
      */
     public QueryResult executeSQL(String sql) {
-        sql = sql.trim();
-        if (sql.isEmpty()) {
+        String cleanSql = stripComments(sql).trim();
+        if (cleanSql.isEmpty()) {
+            if (sql != null && !sql.trim().isEmpty()) {
+                return new QueryResult(true, "Query OK (comment only)");
+            }
             return new QueryResult(false, "ERROR: Empty SQL command");
         }
 
-        List<String> statements = splitStatements(sql);
+        List<String> statements = splitStatements(cleanSql);
         if (statements.isEmpty()) {
             return new QueryResult(false, "ERROR: Empty SQL command");
         }
@@ -168,6 +178,11 @@ public class DatabaseManager {
 
         // Normalize for easier matching: remove semicolon and trim
         String cleanUpper = upperSQL.replace(";", "").trim();
+
+        // Check for SOURCE command
+        if (cleanUpper.startsWith("SOURCE ")) {
+            return handleSourceCommand(sql);
+        }
 
         // Check for SUGGEST command
         if (cleanUpper.startsWith("SUGGEST")) {
@@ -287,6 +302,10 @@ public class DatabaseManager {
             String dbName = dbNamePart;
             if (dbName.startsWith("\"") || dbName.startsWith("'")) {
                 dbName = dbName.substring(1, dbName.length() - 1);
+            }
+
+            if (dbName.contains("/") || dbName.contains("\\") || dbName.contains("..")) {
+                return new QueryResult(false, "ERROR: Database name cannot contain path separators or traversal characters.");
             }
             
             if (!dbName.toLowerCase().endsWith(".db")) {
@@ -581,6 +600,9 @@ public class DatabaseManager {
 
         // If target database specified, try to open it
         if (targetDb != null) {
+            if (targetDb.contains("/") || targetDb.contains("\\") || targetDb.contains("..")) {
+                return new QueryResult(false, "ERROR: Database name cannot contain path separators or traversal characters.");
+            }
             File dbFile = context.getDatabasePath(targetDb.endsWith(".db") ? targetDb : targetDb + ".db");
             if (!dbFile.exists()) {
                 return new QueryResult(false, "Database '" + targetDb + "' does not exist");
@@ -926,6 +948,10 @@ public class DatabaseManager {
             if (dbName.startsWith("\"") || dbName.startsWith("'")) {
                 dbName = dbName.substring(1, dbName.length() - 1);
             }
+
+            if (dbName.contains("/") || dbName.contains("\\") || dbName.contains("..")) {
+                return new QueryResult(false, "ERROR: Database name cannot contain path separators or traversal characters.");
+            }
             
             // Add .db extension if not present
             if (!dbName.toLowerCase().endsWith(".db")) {
@@ -970,6 +996,10 @@ public class DatabaseManager {
             String dbName = dbNamePart;
             if (dbName.startsWith("\"") || dbName.startsWith("'")) {
                 dbName = dbName.substring(1, dbName.length() - 1);
+            }
+
+            if (dbName.contains("/") || dbName.contains("\\") || dbName.contains("..")) {
+                return new QueryResult(false, "ERROR: Database name cannot contain path separators or traversal characters.");
             }
             
             if (!dbName.toLowerCase().endsWith(".db")) {
@@ -1051,32 +1081,47 @@ public class DatabaseManager {
         // Sanitize SQL to support MySQL syntax
         String safeSql = sanitizeQuery(sql);
         database.execSQL(safeSql);
-        return new QueryResult(true, "Command executed successfully");
+        
+        int rowsAffected = 0;
+        String upperSafe = safeSql.toUpperCase().trim();
+        if (upperSafe.startsWith("INSERT") || upperSafe.startsWith("UPDATE") || upperSafe.startsWith("DELETE") || upperSafe.startsWith("REPLACE")) {
+            Cursor cursor = null;
+            try {
+                cursor = database.rawQuery("SELECT changes()", null);
+                if (cursor != null && cursor.moveToFirst()) {
+                    rowsAffected = cursor.getInt(0);
+                }
+            } catch (Exception e) {
+                // Ignore any error in getting changes()
+            } finally {
+                if (cursor != null) {
+                    cursor.close();
+                }
+            }
+        }
+        
+        String rowWord = (rowsAffected == 1) ? "row" : "rows";
+        QueryResult result = new QueryResult(true, "Query OK, " + rowsAffected + " " + rowWord + " affected");
+        result.setRowsAffected(rowsAffected);
+        return result;
     }
 
     /**
      * Sanitizes SQL query to make MySQL syntax compatible with SQLite.
-     * Complexity: O(L) where L = length of SQL string
-     */
-    /**
-     * Sanitizes SQL query to make MySQL syntax compatible with SQLite.
-     * Complexity: O(L) where L = length of SQL string
      */
     private String sanitizeQuery(String sql) {
         String processedSql = sql;
         
         // 1. Handle MySQL AUTO_INCREMENT -> SQLite AUTOINCREMENT
         // SQLite Requirement: Must be "INTEGER PRIMARY KEY AUTOINCREMENT"
-        // Pattern: "INT AUTO_INCREMENT PRIMARY KEY" -> "INTEGER PRIMARY KEY AUTOINCREMENT"
         if (processedSql.toUpperCase().contains("AUTO_INCREMENT")) {
-            // Case 1: INT AUTO_INCREMENT PRIMARY KEY -> INTEGER PRIMARY KEY AUTOINCREMENT
-            processedSql = processedSql.replaceAll("(?i)\\bINT\\s+AUTO_INCREMENT\\s+PRIMARY\\s+KEY\\b", "INTEGER PRIMARY KEY AUTOINCREMENT");
+            // Case 1: INT/INTEGER/BIGINT/etc. + AUTO_INCREMENT + PRIMARY KEY -> INTEGER PRIMARY KEY AUTOINCREMENT
+            processedSql = processedSql.replaceAll("(?i)\\b(?:INTEGER|INT|BIGINT|SMALLINT|TINYINT|MEDIUMINT)\\s+AUTO_INCREMENT\\s+PRIMARY\\s+KEY\\b", "INTEGER PRIMARY KEY AUTOINCREMENT");
             
-            // Case 2: INTEGER AUTO_INCREMENT PRIMARY KEY -> INTEGER PRIMARY KEY AUTOINCREMENT (just in case)
-            processedSql = processedSql.replaceAll("(?i)\\bINTEGER\\s+AUTO_INCREMENT\\s+PRIMARY\\s+KEY\\b", "INTEGER PRIMARY KEY AUTOINCREMENT");
+            // Case 2: INT/INTEGER/BIGINT/etc. + PRIMARY KEY + AUTO_INCREMENT -> INTEGER PRIMARY KEY AUTOINCREMENT
+            processedSql = processedSql.replaceAll("(?i)\\b(?:INTEGER|INT|BIGINT|SMALLINT|TINYINT|MEDIUMINT)\\s+PRIMARY\\s+KEY\\s+AUTO_INCREMENT\\b", "INTEGER PRIMARY KEY AUTOINCREMENT");
             
             // Case 3: Just AUTO_INCREMENT -> AUTOINCREMENT (Fallback)
-            // Note: This might fail if used with INT instead of INTEGER, but catches other variants
             processedSql = processedSql.replaceAll("(?i)AUTO_INCREMENT", "AUTOINCREMENT");
         }
         
@@ -1213,9 +1258,247 @@ public class DatabaseManager {
             processedSql = processedSql.replaceAll("(?i)VERSION\\(\\)", "sqlite_version()");
         }
 
+        // 17. Handle START TRANSACTION (MySQL) -> BEGIN TRANSACTION (SQLite)
+        if (processedSql.toUpperCase().contains("START")) {
+            processedSql = processedSql.replaceAll("(?i)^(\\s*)START\\s+TRANSACTION(?:\\s+(?:READ\\s+(?:WRITE|ONLY)|WITH\\s+CONSISTENT\\s+SNAPSHOT))?\\b", "$1BEGIN TRANSACTION");
+        }
+
         return processedSql;
     }
 
+    private QueryResult handleSourceCommand(String sql) {
+        try {
+            // Extract the path after "SOURCE" (case-insensitive substring)
+            String trimmed = sql.trim();
+            String pathPart = trimmed.substring(6).trim(); // "SOURCE".length() = 6
+            if (pathPart.endsWith(";")) {
+                pathPart = pathPart.substring(0, pathPart.length() - 1).trim();
+            }
+            
+            // Remove potential quotes
+            if ((pathPart.startsWith("'") && pathPart.endsWith("'")) ||
+                (pathPart.startsWith("\"") && pathPart.endsWith("\"")) ||
+                (pathPart.startsWith("`") && pathPart.endsWith("`"))) {
+                pathPart = pathPart.substring(1, pathPart.length() - 1).trim();
+            }
+            
+            if (pathPart.isEmpty()) {
+                return new QueryResult(false, "ERROR: Usage: SOURCE /path/to/file.sql;");
+            }
+            
+            File file = new File(pathPart);
+            String fileNameOnly = file.getName();
+            boolean found = false;
+            
+            // Try absolute path first (verify actual readability by opening a stream)
+            try {
+                if (file.exists() && file.isFile() && file.canRead()) {
+                    try (java.io.InputStream is = new java.io.FileInputStream(file)) {
+                        found = true;
+                    }
+                }
+            } catch (Exception ignored) {}
+            
+            // 1. Try relative to App's Safe External Files directory
+            if (!found) {
+                try {
+                    File dir = context.getExternalFilesDir(null);
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            // 2. Try relative to App's Safe External Cache directory
+            if (!found) {
+                try {
+                    File dir = context.getExternalCacheDir();
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            // 3. Try relative to App's Safe Internal Files directory
+            if (!found) {
+                try {
+                    File dir = context.getFilesDir();
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            // 4. Try relative to App's Safe Internal Cache directory
+            if (!found) {
+                try {
+                    File dir = context.getCacheDir();
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            // 5. Try relative to Downloads
+            if (!found) {
+                try {
+                    File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            // 6. Try relative to App's Database directory
+            if (!found) {
+                try {
+                    File dir = context.getDatabasePath("dummy").getParentFile();
+                    if (dir != null) {
+                        File f = new File(dir, pathPart);
+                        if (f.exists() && f.isFile() && f.canRead()) {
+                            try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                file = f;
+                                found = true;
+                            }
+                        }
+                        if (!found) {
+                            f = new File(dir, fileNameOnly);
+                            if (f.exists() && f.isFile() && f.canRead()) {
+                                try (java.io.InputStream is = new java.io.FileInputStream(f)) {
+                                    file = f;
+                                    found = true;
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+            }
+            
+            if (!found) {
+                File safeDir = context.getExternalFilesDir(null);
+                String safePath = safeDir != null ? safeDir.getAbsolutePath() : "/storage/emulated/0/Android/data/com.smartqueue.droidsql/files";
+                return new QueryResult(false, "ERROR: Access Denied or File Not Found: " + pathPart + "\n\n" +
+                        "For security and modern Android guidelines (Scoped Storage):\n" +
+                        "1. Place your SQL script file in the app's safe storage folder:\n" +
+                        "   " + safePath + "\n" +
+                        "2. Run command: SOURCE " + fileNameOnly + ";");
+            }
+            
+            // Read file content
+            StringBuilder script = new StringBuilder();
+            try (java.io.BufferedReader reader = new java.io.BufferedReader(new java.io.FileReader(file))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    script.append(line).append("\n");
+                }
+            }
+            
+            String scriptSql = script.toString().trim();
+            if (scriptSql.isEmpty()) {
+                return new QueryResult(true, "Query OK, script is empty");
+            }
+            
+            // Split and execute statements
+            List<String> statements = splitStatements(scriptSql);
+            if (statements.isEmpty()) {
+                return new QueryResult(true, "Query OK, no executable statements found");
+            }
+            
+            long startTime = System.currentTimeMillis();
+            QueryResult lastResult = null;
+            int executedCount = 0;
+            
+            for (String statement : statements) {
+                lastResult = executeSingleSQL(statement);
+                if (!lastResult.isSuccess()) {
+                    return new QueryResult(false, "ERROR: SQL Script failed at statement: " + statement + "\nDetail: " + lastResult.getMessage());
+                }
+                executedCount++;
+            }
+            
+            long totalTime = System.currentTimeMillis() - startTime;
+            double seconds = totalTime / 1000.0;
+            return new QueryResult(true, "Query OK, " + executedCount + " statements executed successfully from '" + file.getName() + "'");
+            
+        } catch (Exception e) {
+            return new QueryResult(false, "ERROR: Failed to read/execute SQL script: " + e.getMessage());
+        }
+    }
 
     /**
      * Determines the SQL command type from the first keyword.
@@ -1491,5 +1774,86 @@ public class DatabaseManager {
                 "* **UUID** - Unique ID\n" +
                 "* **GEOMETRY / POINT** - Spatial\n\n" +
                 "Note: PocketSQL automatically maps these matching SQLite types!";
+    }
+
+    public static String stripComments(String sql) {
+        if (sql == null) return "";
+        
+        StringBuilder cleanSql = new StringBuilder();
+        int len = sql.length();
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        boolean inBacktick = false;
+        
+        for (int i = 0; i < len; i++) {
+            char c = sql.charAt(i);
+            
+            // Handle escape characters
+            if (c == '\\' && i + 1 < len) {
+                cleanSql.append(c);
+                cleanSql.append(sql.charAt(i + 1));
+                i++;
+                continue;
+            }
+            
+            // Toggle quotes
+            if (c == '\'' && !inDoubleQuote && !inBacktick) {
+                inSingleQuote = !inSingleQuote;
+                cleanSql.append(c);
+                continue;
+            } else if (c == '"' && !inSingleQuote && !inBacktick) {
+                inDoubleQuote = !inDoubleQuote;
+                cleanSql.append(c);
+                continue;
+            } else if (c == '`' && !inSingleQuote && !inDoubleQuote) {
+                inBacktick = !inBacktick;
+                cleanSql.append(c);
+                continue;
+            }
+            
+            // If we are inside a quote, keep everything as is
+            if (inSingleQuote || inDoubleQuote || inBacktick) {
+                cleanSql.append(c);
+                continue;
+            }
+            
+            // Check for line comments starting with --
+            if (c == '-' && i + 1 < len && sql.charAt(i + 1) == '-') {
+                i += 2;
+                while (i < len && sql.charAt(i) != '\n') {
+                    i++;
+                }
+                if (i < len) {
+                    cleanSql.append('\n'); // keep newline
+                }
+                continue;
+            }
+            
+            // Check for line comments starting with #
+            if (c == '#') {
+                i++;
+                while (i < len && sql.charAt(i) != '\n') {
+                    i++;
+                }
+                if (i < len) {
+                    cleanSql.append('\n');
+                }
+                continue;
+            }
+            
+            // Check for block comments starting with /*
+            if (c == '/' && i + 1 < len && sql.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < len && !(sql.charAt(i) == '*' && sql.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i++; // skip '/' of closing block
+                continue;
+            }
+            
+            cleanSql.append(c);
+        }
+        
+        return cleanSql.toString();
     }
 }

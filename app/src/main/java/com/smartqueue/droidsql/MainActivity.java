@@ -22,6 +22,13 @@ import android.widget.ListPopupWindow;
 import android.widget.ArrayAdapter;
 import java.util.ArrayList;
 import com.smartqueue.droidsql.databinding.ActivityMainBinding;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import android.net.Uri;
+import com.smartqueue.droidsql.utils.SQLImportHelper;
+import java.io.InputStream;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 
 import java.util.List;
 
@@ -50,6 +57,11 @@ public class MainActivity extends AppCompatActivity {
     private List<String> dbSchemaSuggestions = new ArrayList<>();
     private boolean isAutoPairing = false;
     
+    // File Picker variables for Importing Data
+    private ActivityResultLauncher<String> filePickerLauncher;
+    private ActivityResultLauncher<String[]> permissionLauncher;
+    private String currentImportType = "";
+    
     // Auto-rotation suggestion fields
     private android.view.OrientationEventListener orientationEventListener;
     private int targetManualOrientation = -1;
@@ -65,6 +77,24 @@ public class MainActivity extends AppCompatActivity {
         // Initialize ViewModel
         viewModel = new ViewModelProvider(this).get(DatabaseViewModel.class);
 
+        // Initialize File Picker
+        filePickerLauncher = registerForActivityResult(
+            new ActivityResultContracts.GetContent(),
+            uri -> {
+                if (uri != null) {
+                    handleImportUri(uri);
+                }
+            }
+        );
+
+        // Initialize Permission Request Launcher
+        permissionLauncher = registerForActivityResult(
+            new ActivityResultContracts.RequestMultiplePermissions(),
+            result -> {
+                // Dynamic permission outcome handling
+            }
+        );
+
         // Setup UI listeners
         setupListeners();
         setupTvFocusSelector();
@@ -77,6 +107,9 @@ public class MainActivity extends AppCompatActivity {
         
         // Setup orientation change suggestion button
         setupRotationListener();
+
+        // Check and request storage permissions if on Android 12L or lower
+        checkAndRequestPermissions();
     }
 
     /**
@@ -363,6 +396,11 @@ public class MainActivity extends AppCompatActivity {
         binding.btnExport.setOnClickListener(v -> {
             viewModel.exportCurrentDatabase();
             Toast.makeText(this, "Check Downloads folder", Toast.LENGTH_SHORT).show();
+        });
+
+        // Import File
+        binding.btnImport.setOnClickListener(v -> {
+            showImportOptionsDialog();
         });
 
         // Settings Dialog
@@ -1482,6 +1520,229 @@ public class MainActivity extends AppCompatActivity {
             textView.setText("➜ " + item);
             
             return textView;
+        }
+    }
+
+    private void showImportOptionsDialog() {
+        String[] options = {
+            "📁 SQLite Database File (.db)",
+            "📜 SQL Script File (.sql)",
+            "📊 CSV File (.csv)",
+            "📈 Excel Worksheet (.xlsx)"
+        };
+        
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Select File Type to Import")
+            .setItems(options, (dialog, which) -> {
+                if (which == 0) {
+                    currentImportType = "db";
+                    filePickerLauncher.launch("*/*");
+                } else if (which == 1) {
+                    currentImportType = "sql";
+                    filePickerLauncher.launch("*/*");
+                } else if (which == 2) {
+                    currentImportType = "csv";
+                    filePickerLauncher.launch("*/*");
+                } else if (which == 3) {
+                    currentImportType = "xlsx";
+                    filePickerLauncher.launch("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void handleImportUri(Uri uri) {
+        try {
+            String fileName = "imported_data";
+            android.database.Cursor cursor = getContentResolver().query(uri, null, null, null, null);
+            if (cursor != null) {
+                if (cursor.moveToFirst()) {
+                    int nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME);
+                    if (nameIndex != -1) {
+                        fileName = cursor.getString(nameIndex);
+                    }
+                }
+                cursor.close();
+            }
+            
+            String baseName = fileName;
+            int lastDot = fileName.lastIndexOf('.');
+            if (lastDot != -1) {
+                baseName = fileName.substring(0, lastDot);
+            }
+            
+            final String finalBaseName = baseName;
+            
+            if ("db".equals(currentImportType)) {
+                handleDatabaseImport(uri, finalBaseName);
+            } else if ("sql".equals(currentImportType)) {
+                handleSqlScriptImport(uri);
+            } else if ("csv".equals(currentImportType) || "xlsx".equals(currentImportType)) {
+                showTabularImportDialog(uri, finalBaseName);
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Import preparation failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void handleDatabaseImport(Uri uri, String defaultDbName) {
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(defaultDbName);
+        input.setSingleLine(true);
+        
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Import Database")
+            .setMessage("Enter name for the imported database:")
+            .setView(input)
+            .setPositiveButton("Import", (dialog, which) -> {
+                String dbName = input.getText().toString().trim();
+                if (dbName.isEmpty() || dbName.contains("/") || dbName.contains("\\") || dbName.contains("..")) {
+                    Toast.makeText(this, "ERROR: Invalid database name", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                
+                if (!dbName.toLowerCase().endsWith(".db")) {
+                    dbName = dbName + ".db";
+                }
+                
+                try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
+                    if (inputStream == null) {
+                        Toast.makeText(this, "ERROR: Could not open file stream", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    
+                    if (!SQLImportHelper.isValidSQLiteHeader(inputStream)) {
+                        Toast.makeText(this, "ERROR: Invalid SQLite database file header. File has been blocked for security.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    
+                    try (InputStream freshInputStream = getContentResolver().openInputStream(uri)) {
+                        java.io.File destination = getDatabasePath(dbName);
+                        if (destination.getParentFile() != null) {
+                            destination.getParentFile().mkdirs();
+                        }
+                        
+                        try (java.io.FileOutputStream outputStream = new java.io.FileOutputStream(destination)) {
+                            byte[] buffer = new byte[4096];
+                            int read;
+                            while ((read = freshInputStream.read(buffer)) != -1) {
+                                outputStream.write(buffer, 0, read);
+                            }
+                        }
+                        
+                        viewModel.executeSQL("USE " + dbName.replace(".db", "") + ";");
+                        Toast.makeText(this, "Database '" + dbName + "' imported and opened successfully!", Toast.LENGTH_LONG).show();
+                    }
+                } catch (Exception e) {
+                    Toast.makeText(this, "Database import failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void handleSqlScriptImport(Uri uri) {
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Run SQL Script")
+            .setMessage("Are you sure you want to execute all statements from this SQL file in the active database?")
+            .setPositiveButton("Run", (dialog, which) -> {
+                try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
+                    if (inputStream == null) return;
+                    
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+                    StringBuilder script = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        script.append(line).append("\n");
+                    }
+                    
+                    String sql = script.toString();
+                    viewModel.executeSQL(sql);
+                    Toast.makeText(this, "SQL Script executed successfully", Toast.LENGTH_SHORT).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "SQL Script execution failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showTabularImportDialog(Uri uri, String defaultTableName) {
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(this);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setPadding(40, 20, 40, 20);
+        
+        android.widget.TextView labelTable = new android.widget.TextView(this);
+        labelTable.setText("Table Name:");
+        labelTable.setPadding(0, 10, 0, 10);
+        layout.addView(labelTable);
+        
+        android.widget.EditText inputTable = new android.widget.EditText(this);
+        String cleanDefault = defaultTableName.replaceAll("[^a-zA-Z0-9_]", "");
+        inputTable.setText(cleanDefault.isEmpty() ? "imported_table" : cleanDefault);
+        inputTable.setSingleLine(true);
+        layout.addView(inputTable);
+        
+        android.widget.CheckBox cbHeader = new android.widget.CheckBox(this);
+        cbHeader.setText("First row contains column headers");
+        cbHeader.setChecked(true);
+        cbHeader.setPadding(0, 20, 0, 10);
+        layout.addView(cbHeader);
+        
+        new androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Import Data to Table")
+            .setView(layout)
+            .setPositiveButton("Import", (dialog, which) -> {
+                String tableName = inputTable.getText().toString().trim();
+                boolean hasHeader = cbHeader.isChecked();
+                
+                if (tableName.isEmpty()) {
+                    Toast.makeText(this, "Table name cannot be empty", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                
+                new Thread(() -> {
+                    try (InputStream inputStream = getContentResolver().openInputStream(uri)) {
+                        if (inputStream == null) return;
+                        
+                        List<List<String>> data;
+                        if ("csv".equals(currentImportType)) {
+                            data = SQLImportHelper.parseCSV(inputStream);
+                        } else {
+                            data = SQLImportHelper.parseXLSX(inputStream);
+                        }
+                        
+                        runOnUiThread(() -> {
+                            viewModel.importTabularData(tableName, data, hasHeader);
+                        });
+                        
+                    } catch (Exception e) {
+                        runOnUiThread(() -> {
+                            Toast.makeText(MainActivity.this, "Import failed: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                        });
+                    }
+                }).start();
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void checkAndRequestPermissions() {
+        if (android.os.Build.VERSION.SDK_INT <= android.os.Build.VERSION_CODES.S_V2) {
+            List<String> permissionsNeeded = new ArrayList<>();
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(android.Manifest.permission.READ_EXTERNAL_STORAGE);
+            }
+            if (androidx.core.content.ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
+            }
+            
+            if (!permissionsNeeded.isEmpty()) {
+                permissionLauncher.launch(permissionsNeeded.toArray(new String[0]));
+            }
         }
     }
 }
